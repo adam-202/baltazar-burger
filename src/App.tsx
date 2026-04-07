@@ -59,7 +59,9 @@ import {
   setPersistence
 } from 'firebase/auth';
 import { GoogleGenAI, Type } from "@google/genai";
-import { db, auth } from './firebase';
+import { db, auth, storage } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import imageCompression from 'browser-image-compression';
 
 // --- Types ---
 interface Category {
@@ -457,12 +459,18 @@ export default function App() {
   useEffect(() => {
     if (adminSubView === 'settings' && isAdmin) {
       getDoc(doc(db, 'categories', 'admin_settings')).then(snap => {
-        if (snap.exists() && snap.data().name) {
-          try {
-            const parsed = JSON.parse(snap.data().name);
-            setDbAdmins(Array.isArray(parsed) ? parsed : []);
-          } catch {
-            setDbAdmins([]);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.emails && Array.isArray(data.emails)) {
+            setDbAdmins(data.emails);
+          } else if (data.name) {
+            // Fallback for old JSON string format
+            try {
+              const parsed = JSON.parse(data.name);
+              setDbAdmins(Array.isArray(parsed) ? parsed : []);
+            } catch {
+              setDbAdmins([]);
+            }
           }
         }
       }).catch(e => console.error(e));
@@ -479,6 +487,34 @@ export default function App() {
   const [tableNumber, setTableNumber] = useState(() => localStorage.getItem('tableNumber') || '');
   const [orderNote, setOrderNote] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleImageUpload = async (file: File, type: 'category' | 'item') => {
+    try {
+      setIsUploading(true);
+      
+      // Compression options
+      const options = {
+        maxSizeMB: 0.8,
+        maxWidthOrHeight: 1200,
+        useWebWorker: true,
+      };
+
+      const compressedFile = await imageCompression(file, options);
+      const storageRef = ref(storage, `${type}-images/${Date.now()}-${file.name}`);
+      
+      await uploadBytes(storageRef, compressedFile);
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      setIsUploading(false);
+      return downloadURL;
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      setError(t.error_generic);
+      setIsUploading(false);
+      return null;
+    }
+  };
   const [isOrdering, setIsOrdering] = useState(false);
   const [isCallingWaiter, setIsCallingWaiter] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1668,7 +1704,8 @@ export default function App() {
                           const newEmails = [...dbAdmins, newAdminEmail];
                           await setDoc(doc(db, 'categories', 'admin_settings'), {
                             id: 'admin_settings',
-                            name: JSON.stringify(newEmails),
+                            emails: newEmails,
+                            name: JSON.stringify(newEmails), // Keep for legacy
                             image: 'fallback'
                           });
                           setDbAdmins(newEmails);
@@ -1699,7 +1736,8 @@ export default function App() {
                               const newEmails = dbAdmins.filter(e => e !== email);
                               await setDoc(doc(db, 'categories', 'admin_settings'), {
                                 id: 'admin_settings',
-                                name: JSON.stringify(newEmails),
+                                emails: newEmails,
+                                name: JSON.stringify(newEmails), // Keep for legacy
                                 image: 'fallback'
                               });
                               setDbAdmins(newEmails);
@@ -2039,7 +2077,35 @@ export default function App() {
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingItem.name} onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })} placeholder="İsim (TR)" />
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingItem.price} onChange={(e) => setEditingItem({ ...editingItem, price: Number(e.target.value) })} placeholder="Price" />
               <textarea className="w-full bg-gray-50 p-4 rounded-2xl outline-none h-24 focus:ring-2 focus:ring-orange-500" value={editingItem.description} onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })} placeholder="Açıklama (TR)" />
-              <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingItem.image} onChange={(e) => setEditingItem({ ...editingItem, image: e.target.value })} placeholder="Image URL" />
+              <div className="space-y-1">
+                <div className="text-[10px] font-black uppercase text-gray-400 ml-2">{t.img_url}</div>
+                <div className="flex gap-2">
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    className="flex-1 bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500" 
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const url = await handleImageUpload(file, 'item');
+                        if (url) setEditingItem({ ...editingItem, image: url });
+                      }
+                    }} 
+                  />
+                  {isUploading && <Loader2 className="animate-spin text-orange-600 self-center" />}
+                </div>
+                {editingItem.image && (
+                  <div className="mt-2 relative group">
+                    <img src={editingItem.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" />
+                    <button 
+                      onClick={() => setEditingItem({ ...editingItem, image: '' })}
+                      className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {/* Translation fields */}
               <div className="bg-orange-50 rounded-2xl p-4 space-y-3">
@@ -2114,7 +2180,35 @@ export default function App() {
             </div>
             <div className="space-y-4">
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingCategory.name} onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })} placeholder="Title (TR)" />
-              <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingCategory.image} onChange={(e) => setEditingCategory({ ...editingCategory, image: e.target.value })} placeholder="Image URL" />
+              <div className="space-y-1">
+                <div className="text-[10px] font-black uppercase text-gray-400 ml-2">{t.img_url}</div>
+                <div className="flex gap-2">
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    className="flex-1 bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500" 
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const url = await handleImageUpload(file, 'category');
+                        if (url) setEditingCategory({ ...editingCategory, image: url });
+                      }
+                    }} 
+                  />
+                  {isUploading && <Loader2 className="animate-spin text-orange-600 self-center" />}
+                </div>
+                {editingCategory.image && (
+                  <div className="mt-2 relative group">
+                    <img src={editingCategory.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" />
+                    <button 
+                      onClick={() => setEditingCategory({ ...editingCategory, image: '' })}
+                      className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 onClick={handleAutoTranslateCategory}
                 disabled={isTranslating}
