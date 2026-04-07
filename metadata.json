@@ -1,0 +1,5 @@
+{
+  "name": "Baltazar Burger Terminal",
+  "description": "A full-stack restaurant terminal system with real-time order tracking, multi-language support (TR, EN, AR), and AI-powered menu translation.",
+  "requestFramePermissions": []
+}

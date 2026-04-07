@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* ── Baltazar Burger custom animations ─────────────────────────── */
+
+/* Pending-card pulse: gentle border + shadow flash to draw attention */
+@keyframes bb-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.0); }
+  50%       { box-shadow: 0 0 0 8px rgba(249, 115, 22, 0.25); }
+}
+.bb-pulse-pending {
+  animation: bb-pulse 1.6s ease-in-out infinite;
+}
+
+/* Service-call pulse — blue variant */
+@keyframes bb-pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.0); }
+  50%       { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0.25); }
+}
+.bb-pulse-call {
+  animation: bb-pulse-blue 1.4s ease-in-out infinite;
+}
+
+/* Progress bar shimmer for tracking view */
+@keyframes bb-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+.bb-progress-active {
+  background: linear-gradient(90deg, #f97316 30%, #fb923c 50%, #f97316 70%);
+  background-size: 200% auto;
+  animation: bb-shimmer 2s linear infinite;
+}

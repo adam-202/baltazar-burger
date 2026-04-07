@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email in ["adam.osama60@gmail.com", "friend@example.com"] && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/settings/admins) && 
+         request.auth.token.email in get(/databases/$(database)/documents/settings/admins).data.emails)
+      );
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['id', 'name', 'image']) &&
+             data.id is string && data.name is string && data.image is string &&
+             data.name.size() < 100 && data.image.size() < 500;
+    }
+
+    function isValidItem(data) {
+      return data.keys().hasAll(['id', 'categoryId', 'name', 'price', 'image']) &&
+             data.id is string && data.categoryId is string && data.name is string &&
+             data.price is number && data.image is string &&
+             data.name.size() < 100 && data.image.size() < 500;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['table', 'items', 'total', 'status', 'timestamp']) &&
+             data.table is string && data.items is list && data.total is number &&
+             data.status in ['pending', 'preparing', 'ready', 'delivered'] &&
+             data.timestamp is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && request.resource.data.role == 'customer';
+      allow update: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidCategory(request.resource.data);
+    }
+
+    match /items/{itemId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidItem(request.resource.data);
+    }
+
+    match /orders/{orderId} {
+      // Admins can read all orders.
+      // Customers track their specific order in real-time.
+      allow read: if true;
+      allow create: if isValidOrder(request.resource.data);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /service_calls/{callId} {
+      allow read: if isAdmin();
+      allow create: if request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+    }
+
+    match /settings/{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

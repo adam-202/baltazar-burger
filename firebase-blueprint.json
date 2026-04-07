@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "Category": {
+      "title": "Category",
+      "description": "Menu category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "name_en": { "type": "string" },
+        "name_ar": { "type": "string" },
+        "image": { "type": "string" },
+        "order": { "type": "number" }
+      },
+      "required": ["id", "name", "image"]
+    },
+    "Item": {
+      "title": "Item",
+      "description": "Menu item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "name": { "type": "string" },
+        "name_en": { "type": "string" },
+        "name_ar": { "type": "string" },
+        "price": { "type": "number" },
+        "description": { "type": "string" },
+        "description_en": { "type": "string" },
+        "description_ar": { "type": "string" },
+        "image": { "type": "string" }
+      },
+      "required": ["id", "categoryId", "name", "price", "image"]
+    },
+    "OrderItem": {
+      "title": "Order Item",
+      "description": "An item in an order",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "image": { "type": "string" },
+        "quantity": { "type": "number" }
+      },
+      "required": ["name", "price", "image", "quantity"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order",
+      "type": "object",
+      "properties": {
+        "table": { "type": "string" },
+        "items": { "type": "array", "items": { "$ref": "OrderItem" } },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "preparing", "ready", "delivered"] },
+        "note": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["table", "items", "total", "status", "timestamp"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "customer"] }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "ServiceCall": {
+      "title": "Service Call",
+      "description": "A request for a waiter",
+      "type": "object",
+      "properties": {
+        "table": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["table", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/categories/{categoryId}": { "schema": "Category", "description": "Menu categories" },
+    "/items/{itemId}": { "schema": "Item", "description": "Menu items" },
+    "/orders/{orderId}": { "schema": "Order", "description": "Customer orders" },
+    "/users/{userId}": { "schema": "User", "description": "User profiles" },
+    "/service_calls/{callId}": { "schema": "ServiceCall", "description": "Waiter requests" }
+  }
+}
