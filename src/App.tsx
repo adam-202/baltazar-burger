@@ -490,34 +490,48 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
 
   const handleImageUpload = async (file: File, type: 'category' | 'item') => {
+    if (!isAdmin) {
+      console.error("Upload attempt without admin privileges");
+      setError(t.error_auth);
+      return null;
+    }
+    
     try {
-      console.log("Starting image upload for:", file.name, "type:", type);
+      console.log("Starting image upload for:", file.name, "type:", type, "size:", (file.size/1024).toFixed(2), "KB");
       setIsUploading(true);
       
-      // Compression options
-      const options = {
-        maxSizeMB: 0.8,
-        maxWidthOrHeight: 1200,
-        useWebWorker: false, // Disabling worker for potential better compatibility
-      };
-
-      console.log("Compressing image...");
-      const compressedFile = await imageCompression(file, options);
-      console.log("Image compressed. Size:", (compressedFile.size / 1024).toFixed(2), "KB");
+      let fileToUpload = file;
+      
+      // Attempt compression
+      try {
+        console.log("Attempting compression...");
+        const options = {
+          maxSizeMB: 0.7,
+          maxWidthOrHeight: 1200,
+          useWebWorker: false,
+        };
+        fileToUpload = await imageCompression(file, options);
+        console.log("Compression successful. New size:", (fileToUpload.size / 1024).toFixed(2), "KB");
+      } catch (err) {
+        console.warn("Compression failed, uploading original file:", err);
+      }
       
       const storageRef = ref(storage, `${type}-images/${Date.now()}-${file.name}`);
-      console.log("Uploading to Storage path:", storageRef.fullPath);
+      console.log("Uploading to path:", storageRef.fullPath);
       
-      await uploadBytes(storageRef, compressedFile);
-      console.log("Upload successful. Fetching URL...");
+      const result = await uploadBytes(storageRef, fileToUpload);
+      console.log("Upload resolved:", result.metadata.fullPath);
+      
       const downloadURL = await getDownloadURL(storageRef);
-      console.log("Download URL obtained:", downloadURL);
+      console.log("Obtained download URL:", downloadURL);
       
       setIsUploading(false);
       return downloadURL;
-    } catch (error) {
-      console.error("Error uploading image details:", error);
-      setError(t.error_generic);
+    } catch (error: any) {
+      console.error("Storage upload error details:", error);
+      // Detailed error reporting back to UI
+      const errorMessage = error.code ? `Storage Error: ${error.code}` : t.error_generic;
+      setError(errorMessage);
       setIsUploading(false);
       return null;
     }
@@ -633,10 +647,16 @@ export default function App() {
         if (!isAdminEmail) {
           try {
             const docSnap = await getDoc(doc(db, 'categories', 'admin_settings'));
-            if (docSnap.exists() && docSnap.data().name) {
-              const emails = JSON.parse(docSnap.data().name);
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const emails = data.emails || [];
               if (Array.isArray(emails) && emails.includes(currentUser.email)) {
                 isAdminEmail = true;
+              } else if (data.name) {
+                 try {
+                   const parsed = JSON.parse(data.name);
+                   if (Array.isArray(parsed) && parsed.includes(currentUser.email)) isAdminEmail = true;
+                 } catch {}
               }
             }
           } catch (e) { }
@@ -674,10 +694,16 @@ export default function App() {
       if (!isAdminEmail) {
         try {
           const docSnap = await getDoc(doc(db, 'categories', 'admin_settings'));
-          if (docSnap.exists() && docSnap.data().name) {
-            const emails = JSON.parse(docSnap.data().name);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const emails = data.emails || [];
             if (Array.isArray(emails) && emails.includes(result.user.email)) {
               isAdminEmail = true;
+            } else if (data.name) {
+               try {
+                 const parsed = JSON.parse(data.name);
+                 if (Array.isArray(parsed) && parsed.includes(result.user.email)) isAdminEmail = true;
+               } catch {}
             }
           }
         } catch (e) { }

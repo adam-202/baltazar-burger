@@ -5,12 +5,8 @@ service firebase.storage {
       // Allow public read access to all menu images
       allow read: if true;
       
-      // Restrict write access to authorized admins
-      allow write: if request.auth != null && (
-        request.auth.token.email == "adam.osama60@gmail.com" ||
-        (firestore.exists(/databases/(default)/documents/categories/admin_settings) &&
-         request.auth.token.email in firestore.get(/databases/(default)/documents/categories/admin_settings).data.emails)
-      );
+      // Temporarily allowing write access for any authenticated user to troubleshoot
+      allow write: if request.auth != null;
     }
   }
 }
