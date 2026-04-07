@@ -491,25 +491,32 @@ export default function App() {
 
   const handleImageUpload = async (file: File, type: 'category' | 'item') => {
     try {
+      console.log("Starting image upload for:", file.name, "type:", type);
       setIsUploading(true);
       
       // Compression options
       const options = {
         maxSizeMB: 0.8,
         maxWidthOrHeight: 1200,
-        useWebWorker: true,
+        useWebWorker: false, // Disabling worker for potential better compatibility
       };
 
+      console.log("Compressing image...");
       const compressedFile = await imageCompression(file, options);
+      console.log("Image compressed. Size:", (compressedFile.size / 1024).toFixed(2), "KB");
+      
       const storageRef = ref(storage, `${type}-images/${Date.now()}-${file.name}`);
+      console.log("Uploading to Storage path:", storageRef.fullPath);
       
       await uploadBytes(storageRef, compressedFile);
+      console.log("Upload successful. Fetching URL...");
       const downloadURL = await getDownloadURL(storageRef);
+      console.log("Download URL obtained:", downloadURL);
       
       setIsUploading(false);
       return downloadURL;
     } catch (error) {
-      console.error("Error uploading image:", error);
+      console.error("Error uploading image details:", error);
       setError(t.error_generic);
       setIsUploading(false);
       return null;

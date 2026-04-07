@@ -8,8 +8,8 @@ service firebase.storage {
       // Restrict write access to authorized admins
       allow write: if request.auth != null && (
         request.auth.token.email == "adam.osama60@gmail.com" ||
-        (firestore.exists(/databases/ai-studio-086b32c0-cc2f-4e3d-8c80-67844f7cc369/documents/categories/admin_settings) &&
-         request.auth.token.email in firestore.get(/databases/ai-studio-086b32c0-cc2f-4e3d-8c80-67844f7cc369/documents/categories/admin_settings).data.emails)
+        (firestore.exists(/databases/(default)/documents/categories/admin_settings) &&
+         request.auth.token.email in firestore.get(/databases/(default)/documents/categories/admin_settings).data.emails)
       );
     }
   }
