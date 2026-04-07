@@ -502,7 +502,7 @@ export default function App() {
       
       let fileToUpload = file;
       
-      // Attempt compression
+      /* Skipping compression for now to isolate issues with the library
       try {
         console.log("Attempting compression...");
         const options = {
@@ -515,6 +515,7 @@ export default function App() {
       } catch (err) {
         console.warn("Compression failed, uploading original file:", err);
       }
+      */
       
       const storageRef = ref(storage, `${type}-images/${Date.now()}-${file.name}`);
       console.log("Uploading to path:", storageRef.fullPath);
