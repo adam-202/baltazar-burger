@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["http://localhost:3000", "https://baltazar-burger.vercel.app"],
+    "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
+    "responseHeader": ["Content-Type", "Authorization", "x-goog-resumable"],
+    "maxAgeSeconds": 3600
+  }
+]
