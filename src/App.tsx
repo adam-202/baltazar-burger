@@ -996,8 +996,8 @@ export default function App() {
     if (!tableNumber || cart.length === 0) return;
     setIsOrdering(true);
     try {
-      const orderRef = doc(db, 'orders', tableNumber);
-      const snap = await getDoc(orderRef);
+      // Use unique ID for every order instead of tableNumber
+      const orderRef = doc(collection(db, 'orders'));
       
       const newItems = cart.map(i => ({
         id: uuidv4(),
@@ -1010,28 +1010,20 @@ export default function App() {
         timestamp: Date.now()
       }));
 
-      if (snap.exists()) {
-         const existingOrder = snap.data() as Order;
-         await updateDoc(orderRef, {
-             items: [...existingOrder.items, ...newItems],
-             total: existingOrder.total + cartTotal,
-             timestamp: Date.now()
-         });
-      } else {
-         await setDoc(orderRef, {
-            table: tableNumber,
-            items: newItems,
-            total: cartTotal,
-            status: 'pending',
-            note: orderNote,
-            timestamp: Date.now()
-         });
-      }
+      await setDoc(orderRef, {
+        id: orderRef.id,
+        table: tableNumber,
+        items: newItems,
+        total: cartTotal,
+        status: 'pending',
+        note: orderNote,
+        timestamp: Date.now()
+      });
       
       await setDoc(doc(db, 'carts', tableNumber), { items: [] });
       setOrderNote('');
-      setTrackedOrderId(tableNumber);
-      localStorage.setItem('trackedOrderId', tableNumber);
+      setTrackedOrderId(orderRef.id);
+      localStorage.setItem('trackedOrderId', orderRef.id);
       setView('track');
     } catch (err) {
       console.error("Order error:", err);
