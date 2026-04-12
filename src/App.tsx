@@ -1004,10 +1004,6 @@ export default function App() {
     if (!tableNumber || cart.length === 0) return;
     setIsOrdering(true);
     try {
-      // Unique order ID — decoupled from tableNumber to prevent collisions
-      const orderId = uuidv4();
-      const orderRef = doc(db, 'orders', orderId);
-      
       const newItems = cart.map(i => ({
         id: uuidv4(),
         name: i.name,
@@ -1019,8 +1015,8 @@ export default function App() {
         timestamp: Date.now()
       }));
 
-      await setDoc(orderRef, {
-        id: orderId,
+      // addDoc auto-generates a unique Firestore document ID — no collisions possible
+      const orderRef = await addDoc(collection(db, 'orders'), {
         table: tableNumber,
         items: newItems,
         total: cartTotal,
@@ -1028,11 +1024,13 @@ export default function App() {
         note: orderNote,
         timestamp: Date.now()
       });
-      
+
+      // Clear the cart for this table (public carts collection — no auth required)
       await setDoc(doc(db, 'carts', tableNumber), { items: [] });
+
       setOrderNote('');
-      setTrackedOrderId(orderId);
-      localStorage.setItem('trackedOrderId', orderId);
+      setTrackedOrderId(orderRef.id);
+      localStorage.setItem('trackedOrderId', orderRef.id);
       setView('track');
     } catch (err: any) {
       // Log Firestore-specific error code for debugging permission issues
