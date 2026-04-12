@@ -30,3 +30,13 @@
   background-size: 200% auto;
   animation: bb-shimmer 2s linear infinite;
 }
+
+/* Progress fill — width is driven by CSS custom property --progress */
+.bb-progress-fill {
+  width: var(--progress, 0%);
+}
+
+/* Equal-width step column for progress tracker (4 steps = 25%) */
+.bb-step-col {
+  width: 25%;
+}

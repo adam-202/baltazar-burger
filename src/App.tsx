@@ -32,8 +32,12 @@ import {
   Bell,
   MapPin,
   ChefHat,
-  PackageCheck
+  PackageCheck,
+  QrCode,
+  ShoppingBag
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { v4 as uuidv4 } from 'uuid';
 import {
   collection,
   doc,
@@ -73,10 +77,10 @@ interface Category {
   order?: number;
 }
 interface ItemVariant {
-  name_tr: string;
-  name_en?: string;
-  name_ar?: string;
-  price: number;
+  label: string;
+  label_en?: string;
+  label_ar?: string;
+  priceOverride?: number;
 }
 
 interface Item {
@@ -106,6 +110,12 @@ interface CartItem extends Item {
   cartItemId: string;
   quantity: number;
   selectedVariant?: ItemVariant;
+}
+
+interface AppTable {
+  id: string;
+  number: string;
+  last_reset_at: number;
 }
 
 interface Order {
@@ -448,7 +458,7 @@ export default function App() {
     if (localStorage.getItem('trackedOrderId')) return 'track';
     return saved === 'admin' ? 'welcome' : saved;
   });
-  const [adminSubView, setAdminSubView] = useState<'dashboard' | 'orders' | 'categories' | 'items' | 'calls' | 'settings'>(() => (localStorage.getItem('lastAdminSubView') as any) || 'dashboard');
+  const [adminSubView, setAdminSubView] = useState<'dashboard' | 'orders' | 'takeaway' | 'categories' | 'items' | 'calls' | 'settings' | 'tables'>(() => (localStorage.getItem('lastAdminSubView') as any) || 'dashboard');
   const [dbAdmins, setDbAdmins] = useState<string[]>([]);
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -480,10 +490,12 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [tables, setTables] = useState<AppTable[]>([]);
   const [liveOrders, setLiveOrders] = useState<Order[]>([]);
   const [todayOrders, setTodayOrders] = useState<Order[]>([]);
   const [serviceCalls, setServiceCalls] = useState<any[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [takeawayStats, setTakeawayStats] = useState(0);
   const [tableNumber, setTableNumber] = useState(() => localStorage.getItem('tableNumber') || '');
   const [orderNote, setOrderNote] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
@@ -562,8 +574,69 @@ export default function App() {
 
   // Persistence Effects
   useEffect(() => {
+    if (!localStorage.getItem('deviceId')) {
+      localStorage.setItem('deviceId', uuidv4());
+    }
+    
+    // Auto-login from QR Code
+    const params = new URLSearchParams(window.location.search);
+    const tbl = params.get('table');
+    if (tbl) {
+      getDoc(doc(db, 'tables', tbl)).then((snap) => {
+        if (snap.exists()) {
+          setTableNumber(tbl);
+          setView('menu');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+          alert('Invalid table. Please call waiter.');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    // Block accidental back-swipes
+    window.history.pushState(null, '', window.location.href);
+    window.onpopstate = () => {
+      window.history.pushState(null, '', window.location.href);
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('lastView', view);
   }, [view]);
+
+  useEffect(() => {
+    let devStart = parseInt(localStorage.getItem('session_start') || '0', 10);
+    if (!devStart) {
+      devStart = Date.now();
+      localStorage.setItem('session_start', devStart.toString());
+    }
+
+    if (tableNumber) {
+      const tbl = tables.find(t => t.id === tableNumber || t.number === tableNumber);
+      if (tbl && tbl.last_reset_at > devStart) {
+        devStart = Date.now();
+        localStorage.setItem('session_start', devStart.toString());
+        setView('welcome');
+        setTableNumber('');
+        localStorage.removeItem('tableNumber');
+        localStorage.removeItem('trackedOrderId');
+        setLastOrder(null);
+        return;
+      }
+
+      const unsubscribe = onSnapshot(doc(db, 'carts', tableNumber), (snap) => {
+        if (snap.exists()) {
+          setCart(snap.data().items || []);
+        } else {
+          setCart([]);
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [tableNumber, tables]);
 
   useEffect(() => {
     localStorage.setItem('lastAdminSubView', adminSubView);
@@ -590,16 +663,28 @@ export default function App() {
       audio.play().catch(e => console.log("Audio play blocked by browser", e));
     };
 
-    if (liveOrders.length > prevOrdersCount.current) {
+    let intervalId: any = null;
+    const hasPendingBill = serviceCalls.some(c => c.type === 'bill' && c.status === 'pending');
+    
+    if (hasPendingBill) {
       playSound();
+      intervalId = setInterval(playSound, 4000); // loop sound for bill every 4s
+    } else {
+      if (liveOrders.length > prevOrdersCount.current) {
+        playSound();
+      }
+      if (serviceCalls.length > prevCallsCount.current) {
+        playSound();
+      }
     }
-    prevOrdersCount.current = liveOrders.length;
 
-    if (serviceCalls.length > prevCallsCount.current) {
-      playSound();
-    }
+    prevOrdersCount.current = liveOrders.length;
     prevCallsCount.current = serviceCalls.length;
-  }, [isAdmin, liveOrders.length, serviceCalls.length]);
+    
+    return () => {
+       if (intervalId) clearInterval(intervalId);
+    };
+  }, [isAdmin, liveOrders.length, serviceCalls]);
 
   // Auth Persistence Initialization
   useEffect(() => {
@@ -765,9 +850,16 @@ export default function App() {
       }
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'items'));
 
+    // Tables
+    const unsubscribeTables = onSnapshot(collection(db, 'tables'), (snapshot) => {
+      const ts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as AppTable));
+      setTables(ts);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'tables'));
+
     return () => {
       unsubscribeCats();
       unsubscribeItems();
+      unsubscribeTables();
     };
   }, [isAdmin, handleFirestoreError]);
 
@@ -850,20 +942,19 @@ export default function App() {
     return cart.reduce((sum, item) => sum + ((Number(item.price) || 0) * item.quantity), 0);
   }, [cart]);
 
-  const addToCart = (item: Item, selectedVariant?: ItemVariant) => {
-    setCart(prev => {
-      const price = selectedVariant?.priceOverride !== undefined && selectedVariant?.priceOverride !== null 
-        ? selectedVariant.priceOverride 
-        : item.price;
-        
-      const cartItemId = selectedVariant ? `${item.id}-${selectedVariant.label}` : item.id;
+  const addToCart = async (item: Item, selectedVariant?: ItemVariant) => {
+    const price = selectedVariant?.priceOverride !== undefined && selectedVariant?.priceOverride !== null 
+      ? selectedVariant.priceOverride 
+      : item.price;
       
-      const existing = prev.find(i => i.cartItemId === cartItemId);
-      if (existing) {
-        return prev.map(i => i.cartItemId === cartItemId ? { ...i, quantity: i.quantity + 1 } : i);
-      }
-      
-      return [...prev, { 
+    const cartItemId = selectedVariant ? `${item.id}-${selectedVariant.label}` : item.id;
+    
+    const existing = cart.find(i => i.cartItemId === cartItemId);
+    let newCart = [];
+    if (existing) {
+      newCart = cart.map(i => i.cartItemId === cartItemId ? { ...i, quantity: i.quantity + 1 } : i);
+    } else {
+      newCart = [...cart, { 
         ...item, 
         cartItemId, 
         price, 
@@ -873,52 +964,88 @@ export default function App() {
         name_en: item.name_en && selectedVariant ? `${item.name_en} (${selectedVariant.label})` : item.name_en,
         name_ar: item.name_ar && selectedVariant ? `${item.name_ar} (${selectedVariant.label})` : item.name_ar,
       }];
-    });
+    }
+    setCart(newCart); // Optimistic UI
+    if (tableNumber) {
+      await setDoc(doc(db, 'carts', tableNumber), { items: newCart }, { merge: true });
+    }
   };
 
-  const removeFromCart = (cartItemId: string) => {
-    setCart(prev => {
-      const existing = prev.find(i => i.cartItemId === cartItemId);
-      if (existing && existing.quantity > 1) {
-        return prev.map(i => i.cartItemId === cartItemId ? { ...i, quantity: i.quantity - 1 } : i);
-      }
-      return prev.filter(i => i.cartItemId !== cartItemId);
-    });
+  const removeFromCart = async (cartItemId: string) => {
+    const existing = cart.find(i => i.cartItemId === cartItemId);
+    let newCart = [];
+    if (existing && existing.quantity > 1) {
+      newCart = cart.map(i => i.cartItemId === cartItemId ? { ...i, quantity: i.quantity - 1 } : i);
+    } else {
+      newCart = cart.filter(i => i.cartItemId !== cartItemId);
+    }
+    setCart(newCart); // Optimistic UI
+    if (tableNumber) {
+      await setDoc(doc(db, 'carts', tableNumber), { items: newCart }, { merge: true });
+    }
   };
 
-  const submitOrder = async () => {
+  const sendToKitchen = async () => {
     if (!tableNumber || cart.length === 0) return;
     setIsOrdering(true);
     try {
-      const orderData = {
-        table: tableNumber,
-        items: cart.map(i => ({
-          name: i.name,
-          price: i.price,
-          image: i.image,
-          quantity: i.quantity,
-          variant: i.selectedVariant?.label
-        })),
-        total: cartTotal,
-        status: 'pending',
-        note: orderNote,
+      const orderRef = doc(db, 'orders', tableNumber);
+      const snap = await getDoc(orderRef);
+      
+      const newItems = cart.map(i => ({
+        id: uuidv4(),
+        name: i.name,
+        price: i.price,
+        image: i.image,
+        quantity: i.quantity,
+        variant: i.selectedVariant?.label,
+        status: 'sent',
         timestamp: Date.now()
-      };
-      const docRef = await addDoc(collection(db, 'orders'), orderData);
-      const newOrder = { id: docRef.id, ...orderData } as Order;
-      setLastOrder(newOrder);
-      // Persist the tracking ID to localStorage so the tracking view
-      // survives a full page refresh.
-      setTrackedOrderId(docRef.id);
-      localStorage.setItem('trackedOrderId', docRef.id);
-      setCart([]);
+      }));
+
+      if (snap.exists()) {
+         const existingOrder = snap.data() as Order;
+         await updateDoc(orderRef, {
+             items: [...existingOrder.items, ...newItems],
+             total: existingOrder.total + cartTotal,
+             timestamp: Date.now()
+         });
+      } else {
+         await setDoc(orderRef, {
+            table: tableNumber,
+            items: newItems,
+            total: cartTotal,
+            status: 'pending',
+            note: orderNote,
+            timestamp: Date.now()
+         });
+      }
+      
+      await setDoc(doc(db, 'carts', tableNumber), { items: [] });
       setOrderNote('');
+      setTrackedOrderId(tableNumber);
+      localStorage.setItem('trackedOrderId', tableNumber);
       setView('track');
     } catch (err) {
       console.error("Order error:", err);
       setError(t.error_generic);
     } finally {
       setIsOrdering(false);
+    }
+  };
+
+  const requestBill = async () => {
+    if (!tableNumber) return;
+    try {
+      await addDoc(collection(db, 'service_calls'), {
+        table: tableNumber,
+        type: 'bill',
+        status: 'pending',
+        timestamp: Date.now()
+      });
+      alert(lang === 'tr' ? 'Hesap istendi. Lütfen bekleyin.' : (lang === 'ar' ? 'تم طلب الفاتورة' : 'Bill has been requested.'));
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -975,10 +1102,10 @@ export default function App() {
     setIsTranslating(true);
     try {
       const ai = getGenAI();
-      const variantStr = (item.variants && item.variants.length > 0) ? ` Variants: JSON array ${JSON.stringify(item.variants.map(v => v.name_tr))}` : "";
+      const variantStr = (item.variants && item.variants.length > 0) ? ` Variants: JSON array ${JSON.stringify(item.variants.map(v => v.label))}` : "";
       
       const prompt = type === 'item' ?
-        `Translate this menu item from Turkish to English and Arabic. Return JSON with exactly these keys: "name_en", "description_en", "name_ar", "description_ar", and if variants are provided, provide "variants" array with objects containing "name_en", "name_ar". Name: "${item.name}". Description: "${item.description || ''}"${variantStr}` :
+        `Translate this menu item from Turkish to English and Arabic. Return JSON with exactly these keys: "name_en", "description_en", "name_ar", "description_ar", and if variants are provided, provide "variants" array with objects containing "label_en", "label_ar". Name: "${item.name}". Description: "${item.description || ''}"${variantStr}` :
         `Translate this category from Turkish to English and Arabic. Return JSON with exactly these keys: "name_en", "name_ar". Name: "${item.name}"`;
 
       const itemProps: any = { 
@@ -994,8 +1121,8 @@ export default function App() {
            items: {
              type: Type.OBJECT,
              properties: {
-               name_en: { type: Type.STRING },
-               name_ar: { type: Type.STRING }
+               label_en: { type: Type.STRING },
+               label_ar: { type: Type.STRING }
              }
            }
          };
@@ -1024,8 +1151,8 @@ export default function App() {
       if (parsed.variants && item.variants) {
          parsed.variants = item.variants.map((v, i) => ({
            ...v,
-           name_en: parsed.variants[i]?.name_en || v.name_en,
-           name_ar: parsed.variants[i]?.name_ar || v.name_ar,
+           label_en: parsed.variants[i]?.label_en || (v as any).label_en,
+           label_ar: parsed.variants[i]?.label_ar || (v as any).label_ar,
          }));
       }
       return parsed;
@@ -1138,7 +1265,7 @@ export default function App() {
       <header className="p-3 md:p-6 flex justify-between items-center bg-white shadow-sm sticky top-0 z-50">
         <div className="flex items-center gap-2 md:gap-4">
           {view !== 'menu' && view !== 'welcome' && (
-            <button onClick={() => setView('menu')} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+            <button onClick={() => setView('menu')} className="p-2 hover:bg-gray-100 rounded-full transition-colors" aria-label="Go back">
               <ChevronLeft className={`w-5 h-5 md:w-6 md:h-6 ${isRtl ? 'rotate-180' : ''}`} />
             </button>
           )}
@@ -1159,7 +1286,7 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="hidden sm:flex bg-gray-100 p-1 rounded-xl">
+          <div className="flex bg-gray-100 p-1 rounded-xl">
             {['tr', 'en', 'ar'].map((l) => (
               <button key={l} onClick={() => setLang(l)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${lang === l ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`}>
                 {l.toUpperCase()}
@@ -1208,15 +1335,15 @@ export default function App() {
 
           {isAdmin ? (
             <div className="flex items-center gap-2">
-              <button onClick={() => setView('admin')} className={`p-2 md:p-3 rounded-xl transition-colors ${view === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600'}`}>
+              <button onClick={() => setView('admin')} className={`p-2 md:p-3 rounded-xl transition-colors ${view === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600'}`} aria-label="Admin panel">
                 <Settings size={20} />
               </button>
-              <button onClick={logout} className="p-2 md:p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors">
+              <button onClick={logout} className="p-2 md:p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors" aria-label="Logout">
                 <LogOut size={20} />
               </button>
             </div>
           ) : (
-            <button onClick={loginAdmin} className="p-2 md:p-3 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors">
+            <button onClick={loginAdmin} className="p-2 md:p-3 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors" aria-label="Login as admin">
               <LogIn size={20} />
             </button>
           )}
@@ -1250,6 +1377,41 @@ export default function App() {
               >
                 {t.start_order}
               </button>
+              
+              <div className="w-full flex items-center justify-center my-4 opacity-30">
+                <div className="h-px bg-black flex-grow"></div>
+                <span className="px-4 text-xs font-bold uppercase">{lang === 'tr' ? 'veya' : 'OR'}</span>
+                <div className="h-px bg-black flex-grow"></div>
+              </div>
+              
+              <button
+                onClick={async () => {
+                  try {
+                    const today = new Date().toISOString().split('T')[0];
+                    const statsRef = doc(db, 'daily_stats', today);
+                    const snap = await getDoc(statsRef);
+                    let count = 1;
+                    if (snap.exists() && snap.data().takeaway_count) {
+                       count = snap.data().takeaway_count + 1;
+                    }
+                    await setDoc(statsRef, { takeaway_count: count }, { merge: true });
+                    const virtualTable = `TW-${count}`;
+                    setTableNumber(virtualTable);
+                    localStorage.setItem('tableNumber', virtualTable);
+                    setView('menu');
+                  } catch (err) {
+                    console.error(err);
+                    const fallback = `TW-${Math.floor(1000 + Math.random() * 9000)}`;
+                    setTableNumber(fallback);
+                    localStorage.setItem('tableNumber', fallback);
+                    setView('menu');
+                  }
+                }}
+                className="w-full bg-white text-orange-600 border-2 border-orange-100 font-black py-4 rounded-[1.8rem] transition-all hover:bg-orange-50 active:scale-95 text-lg flex items-center justify-center gap-2"
+              >
+                <PackageCheck size={20} />
+                {lang === 'tr' ? 'Paket Servis Olarak Başla' : 'Order Takeaway'}
+              </button>
             </div>
           </div>
         )}
@@ -1280,7 +1442,7 @@ export default function App() {
           <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl flex items-center gap-3 animate-in fade-in">
             <AlertCircle size={20} />
             <span className="text-sm font-medium">{error}</span>
-            <button onClick={() => setError(null)} className="ml-auto p-1 hover:bg-red-100 rounded-full"><X size={16} /></button>
+            <button onClick={() => setError(null)} className="ml-auto p-1 hover:bg-red-100 rounded-full" aria-label="Dismiss error"><X size={16} /></button>
           </div>
         )}
 
@@ -1289,7 +1451,7 @@ export default function App() {
             {categories.map((cat) => (
               <div key={cat.id} onClick={() => { setActiveCategory(cat); setView('category'); }} className="group relative cursor-pointer overflow-hidden rounded-3xl shadow-sm hover:shadow-xl transition-all transform hover:-translate-y-1">
                 <div className="aspect-square relative">
-                  <img src={cat.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" referrerPolicy="no-referrer" />
+                  <img src={cat.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" referrerPolicy="no-referrer" alt={getLocalized(cat, 'name')} />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex items-end p-4">
                     <h2 className="text-white font-bold uppercase tracking-wider">{getLocalized(cat, 'name')}</h2>
                   </div>
@@ -1305,21 +1467,30 @@ export default function App() {
               {getLocalized(activeCategory, 'name')}
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredItems.filter(i => i.inStock !== false).map(item => {
+              {filteredItems.map(item => {
                 const desc = getLocalized(item, 'description');
+                const isOut = item.inStock === false;
                 return (
                   <div
                     key={item.id}
                     onClick={() => {
+                      if (isOut) return;
                       setSelectedItem(item);
                       setSelectedVariant(item.variants?.[0] || null);
                     }}
-                    className="bg-white p-4 rounded-[2.5rem] flex gap-4 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-300 cursor-pointer select-none"
+                    className={`bg-white p-4 rounded-[2.5rem] flex gap-4 shadow-sm border border-gray-100 transition-all duration-300 select-none relative overflow-hidden ${isOut ? 'opacity-60 cursor-not-allowed grayscale-[0.5]' : 'hover:shadow-md cursor-pointer'}`}
                   >
+                    {isOut && (
+                      <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-10 backdrop-blur-[1px]">
+                         <div className="bg-red-600 text-white font-black px-6 py-2 rounded-full uppercase tracking-widest shadow-xl rotate-[-10deg]">
+                            {lang === 'tr' ? 'Tükendi' : (lang === 'ar' ? 'نفذت الكمية' : 'Sold Out')}
+                         </div>
+                      </div>
+                    )}
                     <img src={item.image} className="w-24 h-24 md:w-32 md:h-32 object-cover rounded-[1.8rem] flex-shrink-0 shadow-inner" referrerPolicy="no-referrer" alt={getLocalized(item, 'name')} />
                     <div className="flex flex-col justify-between flex-grow min-w-0 py-1">
                       <div>
-                        <div className="flex justify-between items-start mb-1">
+                        <div className="flex justify-between items-start mb-1 gap-2">
                           <h3 className="font-bold text-sm md:text-xl truncate">{getLocalized(item, 'name')}</h3>
                           <span className="text-orange-600 font-bold text-sm md:text-lg whitespace-nowrap">₺{item.price}</span>
                         </div>
@@ -1328,8 +1499,9 @@ export default function App() {
                         </p>
                       </div>
                       <button
-                        onClick={(e) => { e.stopPropagation(); addToCart(item); }}
-                        className="w-max bg-orange-50 text-orange-600 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest hover:bg-orange-600 hover:text-white transition-all flex items-center gap-1 mt-2"
+                        onClick={(e) => { e.stopPropagation(); if (!isOut) addToCart(item); }}
+                        disabled={isOut}
+                        className="w-max bg-orange-50 text-orange-600 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest hover:bg-orange-600 hover:text-white transition-all flex items-center gap-1 mt-2 disabled:opacity-50"
                       >
                         {t.add_to_cart} <Plus size={14} />
                       </button>
@@ -1350,7 +1522,7 @@ export default function App() {
                   <div key={item.id} className="bg-white p-4 rounded-3xl flex justify-between items-center shadow-sm border border-gray-50">
                     <div className="flex items-center gap-4">
                       <div className="relative">
-                        <img src={item.image} className="w-16 h-16 rounded-2xl object-cover" referrerPolicy="no-referrer" />
+                        <img src={item.image} className="w-16 h-16 rounded-2xl object-cover" referrerPolicy="no-referrer" alt={getLocalized(item, 'name')} />
                         <span className="absolute -top-2 -right-2 bg-orange-600 text-white text-xs font-black w-6 h-6 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
                           {item.quantity}
                         </span>
@@ -1361,10 +1533,10 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => addToCart(item, item.selectedVariant)} className="p-2 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 transition-colors">
+                      <button onClick={() => addToCart(item, item.selectedVariant)} className="p-2 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 transition-colors" aria-label="Add one more">
                         <Plus size={18} />
                       </button>
-                      <button onClick={() => removeFromCart(item.cartItemId)} className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 transition-colors">
+                      <button onClick={() => removeFromCart(item.cartItemId)} className="p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 transition-colors" aria-label="Remove from cart">
                         <Trash2 size={18} />
                       </button>
                     </div>
@@ -1390,12 +1562,12 @@ export default function App() {
                   </div>
                   <input type="number" className="w-full bg-gray-50 rounded-2xl p-4 mb-6 text-xl font-black text-center outline-none focus:ring-2 focus:ring-orange-500" value={tableNumber} onChange={(e) => setTableNumber(e.target.value)} placeholder={t.table_no} />
                   <button
-                    onClick={submitOrder}
+                    onClick={sendToKitchen}
                     disabled={!tableNumber || isOrdering}
                     className="w-full bg-orange-600 text-white font-black py-5 rounded-[1.8rem] shadow-xl disabled:opacity-50 transition-all hover:bg-orange-700 flex items-center justify-center gap-2"
                   >
                     {isOrdering ? <Loader2 className="animate-spin" /> : <CheckCircle />}
-                    {t.place_order}
+                    {lang === 'tr' ? 'Mutfağa Gönder' : (lang === 'ar' ? 'أرسل للمطبخ' : 'Send to Kitchen')}
                   </button>
                 </div>
               </div>
@@ -1419,6 +1591,8 @@ export default function App() {
               </button>
               <button onClick={() => setAdminSubView('categories')} className={`px-6 py-2 rounded-xl font-bold transition-all ${adminSubView === 'categories' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`}>{t.categories}</button>
               <button onClick={() => setAdminSubView('settings')} className={`px-6 py-2 rounded-xl font-bold transition-all ${adminSubView === 'settings' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`}>{t.settings}</button>
+              <button onClick={() => setAdminSubView('tables')} className={`px-6 py-2 rounded-xl font-bold transition-all ${adminSubView === 'tables' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`}>{lang === 'tr' ? 'Masalar' : (lang === 'ar' ? 'الطاولات' : 'Tables')}</button>
+              <button onClick={() => setAdminSubView('takeaway')} className={`px-6 py-2 rounded-xl font-bold transition-all ${adminSubView === 'takeaway' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`}>{lang === 'tr' ? 'Paket Servis' : (lang === 'ar' ? 'سفري' : 'Takeaway')}</button>
             </div>
 
             {adminSubView === 'dashboard' && (
@@ -1528,11 +1702,13 @@ export default function App() {
                     {/* Vivid top accent bar */}
                     <div className="absolute top-0 left-0 right-0 h-2 bg-blue-500" />
                     <div className="flex items-center gap-4">
-                      <div className="w-16 h-16 bg-blue-600 text-white text-3xl font-black rounded-2xl flex items-center justify-center shadow-xl shadow-blue-200">
+                      <div className={`w-16 h-16 text-white text-3xl font-black rounded-2xl flex items-center justify-center shadow-xl ${call.type === 'bill' ? 'bg-orange-500 shadow-orange-200' : 'bg-blue-600 shadow-blue-200'}`}>
                         #{call.table}
                       </div>
                       <div>
-                        <div className="font-black text-lg text-blue-700">{t.waiter_needed}</div>
+                        <div className={`font-black text-lg ${call.type === 'bill' ? 'text-orange-700' : 'text-blue-700'}`}>
+                          {call.type === 'bill' ? (lang === 'tr' ? 'Hesap İstiyor' : (lang === 'ar' ? 'يطلب الفاتورة' : 'Requests Bill')) : t.waiter_needed}
+                        </div>
                         <div className="text-xs text-gray-400 font-bold uppercase flex items-center gap-1 mt-1">
                           <Clock size={11} /> {getTimeElapsed(call.timestamp, lang)}
                         </div>
@@ -1548,6 +1724,21 @@ export default function App() {
                 )) : (
                   <div className="col-span-full py-20 text-center text-gray-300 font-bold">{t.no_calls}</div>
                 )}
+              </div>
+            )}
+
+            {adminSubView === 'takeaway' && (
+              <div className="space-y-8 animate-in fade-in">
+                <div className="bg-white p-8 rounded-[3rem] border border-gray-100 shadow-sm text-center">
+                  <div className="w-20 h-20 bg-orange-50 text-orange-600 rounded-[1.5rem] flex items-center justify-center mx-auto mb-6">
+                    <PackageCheck size={40} />
+                  </div>
+                  <h3 className="text-3xl font-black mb-2">{lang === 'tr' ? 'Paket Servis İstatistikleri' : (lang === 'ar' ? 'إحصائيات سفري' : 'Takeaway Stats')}</h3>
+                  <p className="text-gray-500 mb-8 max-w-sm mx-auto font-medium">{lang === 'tr' ? 'Bugün otomatik olarak oluşturulan toplam paket servis sanal masa sayısı.' : 'Total virtual takeaway tables automatically generated today.'}</p>
+                  
+                  <div className="text-7xl font-black text-orange-600 mb-3">{takeawayStats}</div>
+                  <div className="text-sm font-bold tracking-widest text-gray-400 uppercase">{lang === 'tr' ? 'Bugünün Paket Servis Oranı' : 'Takeaway Count Today'}</div>
+                </div>
               </div>
             )}
 
@@ -1601,7 +1792,7 @@ export default function App() {
                           <div className="space-y-3 mb-5 max-h-52 overflow-y-auto pr-1">
                             {order.items.map((item, i) => (
                               <div key={i} className="flex items-center gap-3 border-b border-gray-50 pb-2 last:border-0">
-                                <img src={item.image} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" />
+                                <img src={item.image} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" alt={item.name} />
                                 <div className="flex-1 min-w-0">
                                   <div className="text-sm font-black leading-tight truncate">{item.name}</div>
                                   <div className="text-[10px] text-gray-400 font-bold">₺{item.price} × {item.quantity}</div>
@@ -1613,7 +1804,7 @@ export default function App() {
 
                           <div className="flex items-center justify-between pt-3 border-t mb-5">
                             <div className="font-black text-2xl">₺{order.total}</div>
-                            <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1">
+                            <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1" aria-label="Delete order">
                               <Trash2 size={16} />
                             </button>
                           </div>
@@ -1684,7 +1875,7 @@ export default function App() {
                               }`}>
                               {t[order.status as keyof typeof t] || order.status}
                             </div>
-                            <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1">
+                            <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1" aria-label="Delete order">
                               <Trash2 size={14} />
                             </button>
                           </div>
@@ -1693,7 +1884,7 @@ export default function App() {
                         <div className="px-5 py-3 bg-white space-y-2">
                           {order.items.map((item, i) => (
                             <div key={i} className="flex items-center gap-3">
-                              <img src={item.image} className="w-9 h-9 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" />
+                              <img src={item.image} className="w-9 h-9 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" alt={item.name} />
                               <div className="flex-1 min-w-0">
                                 <div className="text-sm font-bold text-gray-800 truncate">{item.name}</div>
                                 <div className="text-[10px] text-gray-400 font-bold">₺{item.price} × {item.quantity}</div>
@@ -1764,7 +1955,7 @@ export default function App() {
                     {dbAdmins.map(email => (
                       <div key={email} className="flex justify-between items-center bg-gray-50 p-4 rounded-2xl">
                         <span className="font-bold">{email}</span>
-                        <button
+                        <button aria-label="Remove admin email"
                           onClick={async () => {
                             try {
                               const newEmails = dbAdmins.filter(e => e !== email);
@@ -1805,12 +1996,12 @@ export default function App() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {categories.map(c => (
                     <div key={c.id} className="bg-white p-4 rounded-3xl border border-gray-100 hover:shadow-md transition-shadow">
-                      <img src={c.image} className="w-full aspect-square object-cover rounded-2xl mb-4" referrerPolicy="no-referrer" />
+                      <img src={c.image} className="w-full aspect-square object-cover rounded-2xl mb-4" referrerPolicy="no-referrer" alt={getLocalized(c, 'name')} />
                       <div className="flex justify-between items-center">
                         <span className="font-bold text-sm truncate pr-2">{getLocalized(c, 'name')}</span>
                         <div className="flex gap-2">
-                          <button onClick={() => setEditingCategory(c)} className="text-orange-600 hover:scale-110 transition-transform"><Edit2 size={16} /></button>
-                          <button onClick={() => { setActiveCategory(c); setAdminSubView('items'); }} className="text-blue-600 hover:scale-110 transition-transform"><Menu size={16} /></button>
+                          <button onClick={() => setEditingCategory(c)} className="text-orange-600 hover:scale-110 transition-transform" aria-label="Edit category"><Edit2 size={16} /></button>
+                          <button onClick={() => { setActiveCategory(c); setAdminSubView('items'); }} className="text-blue-600 hover:scale-110 transition-transform" aria-label="View items"><Menu size={16} /></button>
                         </div>
                       </div>
                     </div>
@@ -1842,15 +2033,15 @@ export default function App() {
                   {filteredItems.map(item => (
                     <div key={item.id} className="bg-white p-4 rounded-2xl flex justify-between items-center border border-gray-100">
                       <div className="flex items-center gap-4">
-                        <img src={item.image} className="w-12 h-12 rounded-lg object-cover" referrerPolicy="no-referrer" />
+                        <img src={item.image} className="w-12 h-12 rounded-lg object-cover" referrerPolicy="no-referrer" alt={getLocalized(item, 'name')} />
                         <div>
                           <div className="font-bold">{getLocalized(item, 'name')}</div>
                           <div className="text-sm text-gray-400 font-mono">₺{item.price}</div>
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => setEditingItem(item)} className="p-2 text-gray-400 hover:text-orange-600 transition-colors"><Edit2 size={18} /></button>
-                        <button onClick={() => removeItem(item.id)} className="p-2 text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={18} /></button>
+                        <button onClick={() => setEditingItem(item)} className="p-2 text-gray-400 hover:text-orange-600 transition-colors" aria-label="Edit item"><Edit2 size={18} /></button>
+                        <button onClick={() => removeItem(item.id)} className="p-2 text-gray-400 hover:text-red-600 transition-colors" aria-label="Delete item"><Trash2 size={18} /></button>
                       </div>
                     </div>
                   ))}
@@ -1955,9 +2146,9 @@ export default function App() {
                   <div className="absolute top-6 left-0 right-0 h-2 bg-gray-200 rounded-full" />
                   {/* Active fill with shimmer */}
                   <div
-                    className={`absolute top-6 left-0 h-2 rounded-full transition-all duration-700 ease-in-out ${lastOrder?.status === 'delivered' ? 'bg-gray-400' : 'bb-progress-active'
+                    ref={(el) => { if (el) el.style.setProperty('--progress', `${progressPct}%`); }}
+                    className={`absolute top-6 left-0 h-2 rounded-full transition-all duration-700 ease-in-out bb-progress-fill ${lastOrder?.status === 'delivered' ? 'bg-gray-400' : 'bb-progress-active'
                       }`}
-                    style={{ width: `${progressPct}%` }}
                   />
                   {/* Step dots */}
                   <div className="relative flex justify-between">
@@ -1965,7 +2156,7 @@ export default function App() {
                       const done = idx < currentIndex;
                       const active = idx === currentIndex;
                       return (
-                        <div key={step.key} className="flex flex-col items-center gap-2" style={{ width: '25%' }}>
+                        <div key={step.key} className="flex flex-col items-center gap-2 bb-step-col">
                           <div className={`w-12 h-12 rounded-full flex items-center justify-center z-10 transition-all duration-500 border-4 ${done
                             ? 'bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-200'
                             : active
@@ -2015,8 +2206,14 @@ export default function App() {
                   </button>
                 )}
                 <button
+                  onClick={requestBill}
+                  className="w-full bg-orange-100 text-orange-600 font-bold py-3 rounded-2xl hover:bg-orange-200 transition-all active:scale-95 mb-3"
+                >
+                  {lang === 'tr' ? 'Hesap İste' : (lang === 'ar' ? 'طلب الفاتورة' : 'Request Bill')}
+                </button>
+                <button
                   onClick={() => setView('menu')}
-                  className="w-full bg-black text-white font-bold py-3 rounded-2xl hover:bg-gray-800 transition-all active:scale-95"
+                  className="w-full bg-black text-white font-bold py-3 rounded-2xl hover:bg-gray-800 transition-all active:scale-95 mb-3"
                 >
                   {t.back}
                 </button>
@@ -2048,6 +2245,7 @@ export default function App() {
               <button
                 onClick={() => setSelectedItem(null)}
                 className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors backdrop-blur-sm"
+                aria-label="Close item detail"
               >
                 <X size={20} />
               </button>
@@ -2079,7 +2277,7 @@ export default function App() {
                           <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedVariant?.label === variant.label ? 'border-orange-500' : 'border-gray-300'}`}>
                             {selectedVariant?.label === variant.label && <div className="w-3 h-3 bg-orange-500 rounded-full" />}
                           </div>
-                          <span className="font-bold text-gray-800">{variant.label}</span>
+                          <span className="font-bold text-gray-800">{getLocalized(variant, 'label')}</span>
                         </div>
                         {variant.priceOverride !== undefined && <span className="font-black text-orange-600 text-lg">₺{variant.priceOverride}</span>}
                       </label>
@@ -2105,7 +2303,7 @@ export default function App() {
           <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 max-h-[90vh] overflow-y-auto shadow-2xl animate-in zoom-in-95">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-2xl font-black">{t.update_item}</h3>
-              <button onClick={() => setEditingItem(null)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"><X /></button>
+              <button onClick={() => setEditingItem(null)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors" aria-label="Close editor"><X /></button>
             </div>
             <div className="space-y-4">
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingItem.name} onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })} placeholder="İsim (TR)" />
@@ -2117,6 +2315,7 @@ export default function App() {
                   <input 
                     type="file" 
                     accept="image/*" 
+                    title="Upload item image"
                     className="flex-1 bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500" 
                     onChange={async (e) => {
                       const file = e.target.files?.[0];
@@ -2130,10 +2329,11 @@ export default function App() {
                 </div>
                 {editingItem.image && (
                   <div className="mt-2 relative group">
-                    <img src={editingItem.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" />
+                    <img src={editingItem.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" alt="Item preview" />
                     <button 
                       onClick={() => setEditingItem({ ...editingItem, image: '' })}
                       className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label="Remove image"
                     >
                       <X size={10} />
                     </button>
@@ -2157,7 +2357,7 @@ export default function App() {
               <div className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl">
                 <span className="font-bold text-gray-700">{t.in_stock}</span>
                 <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" className="sr-only peer" checked={editingItem.inStock !== false} onChange={(e) => setEditingItem({ ...editingItem, inStock: e.target.checked })} />
+                  <input type="checkbox" className="sr-only peer" checked={editingItem.inStock !== false} onChange={(e) => setEditingItem({ ...editingItem, inStock: e.target.checked })} title="Toggle in stock" />
                   <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
                 </label>
               </div>
@@ -2183,7 +2383,7 @@ export default function App() {
                       const newVariants = [...(editingItem.variants || [])];
                       newVariants.splice(i, 1);
                       setEditingItem({ ...editingItem, variants: newVariants });
-                    }} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={18} /></button>
+                    }} className="text-red-400 hover:text-red-600 p-2" aria-label="Remove variant"><Trash2 size={18} /></button>
                   </div>
                 ))}
                 {(!editingItem.variants || editingItem.variants.length === 0) && (
@@ -2210,7 +2410,7 @@ export default function App() {
           <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl animate-in zoom-in-95">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-2xl font-black">{t.manage_cat}</h3>
-              <button onClick={() => setEditingCategory(null)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"><X /></button>
+              <button onClick={() => setEditingCategory(null)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors" aria-label="Close editor"><X /></button>
             </div>
             <div className="space-y-4">
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingCategory.name} onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })} placeholder="Title (TR)" />
@@ -2220,6 +2420,7 @@ export default function App() {
                   <input 
                     type="file" 
                     accept="image/*" 
+                    title="Upload category image"
                     className="flex-1 bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500" 
                     onChange={async (e) => {
                       const file = e.target.files?.[0];
@@ -2233,10 +2434,11 @@ export default function App() {
                 </div>
                 {editingCategory.image && (
                   <div className="mt-2 relative group">
-                    <img src={editingCategory.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" />
+                    <img src={editingCategory.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" alt="Category preview" />
                     <button 
                       onClick={() => setEditingCategory({ ...editingCategory, image: '' })}
                       className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label="Remove image"
                     >
                       <X size={10} />
                     </button>

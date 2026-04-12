@@ -38,7 +38,7 @@ service cloud.firestore {
     function isValidOrder(data) {
       return data.keys().hasAll(['table', 'items', 'total', 'status', 'timestamp']) &&
              data.table is string && data.items is list && data.total is number &&
-             data.status in ['pending', 'preparing', 'ready', 'delivered'] &&
+             data.status in ['pending', 'preparing', 'ready', 'delivered', 'sent'] &&
              data.timestamp is number;
     }
 
@@ -67,8 +67,18 @@ service cloud.firestore {
       // Customers track their specific order in real-time.
       allow read: if true;
       allow create: if isValidOrder(request.resource.data);
-      allow update: if isAdmin();
+      allow update: if true; // allow customers to append items to their active session
       allow delete: if isAdmin();
+    }
+
+    match /tables/{tableId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /daily_stats/{docId} {
+      allow read: if true;
+      allow write: if true; // allow takeaway incrementing
     }
 
     match /service_calls/{callId} {
