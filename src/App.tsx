@@ -124,6 +124,7 @@ interface Order {
   items: OrderItem[];
   total: number;
   status: 'pending' | 'preparing' | 'ready' | 'delivered';
+  paymentStatus?: 'unpaid' | 'paid';
   note?: string;
   timestamp: number;
 }
@@ -1021,6 +1022,7 @@ export default function App() {
         items: newItems,
         total: cartTotal,
         status: 'pending',
+        paymentStatus: 'unpaid',
         note: orderNote,
         timestamp: Date.now()
       });
@@ -1029,8 +1031,10 @@ export default function App() {
       await setDoc(doc(db, 'carts', tableNumber), { items: [] });
 
       setOrderNote('');
+      // Track newest order for status updates
       setTrackedOrderId(orderRef.id);
       localStorage.setItem('trackedOrderId', orderRef.id);
+      // Navigate to track view — customer can navigate back to menu for additional orders
       setView('track');
     } catch (err: any) {
       // Log Firestore-specific error code for debugging permission issues
@@ -1090,9 +1094,22 @@ export default function App() {
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, { status: newStatus });
+      await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
     } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
+  // Confirm payment — marks order paid WITHOUT deleting it, keeps full audit trail
+  const confirmPayment = async (orderId: string) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), {
+        paymentStatus: 'paid',
+        status: 'delivered'
+      });
+    } catch (err: any) {
+      const code = err?.code || 'unknown';
+      console.error(`Payment confirm error [${code}]:`, err);
       handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
     }
   };
@@ -1420,20 +1437,30 @@ export default function App() {
                     const today = new Date().toISOString().split('T')[0];
                     const statsRef = doc(db, 'daily_stats', today);
                     const snap = await getDoc(statsRef);
+                    // Increment daily counter
                     let count = 1;
                     if (snap.exists() && snap.data().takeaway_count) {
                        count = snap.data().takeaway_count + 1;
                     }
                     await setDoc(statsRef, { takeaway_count: count }, { merge: true });
-                    const virtualTable = `TW-${count}`;
+                    // Each takeaway session gets a unique ID — prevents collisions on repeat orders
+                    const virtualTable = `TW-${count}-${uuidv4().slice(0, 6)}`;
                     setTableNumber(virtualTable);
                     localStorage.setItem('tableNumber', virtualTable);
+                    // Clear any previous session tracking
+                    localStorage.removeItem('trackedOrderId');
+                    setTrackedOrderId(null);
+                    setLastOrder(null);
                     setView('menu');
                   } catch (err) {
                     console.error(err);
-                    const fallback = `TW-${Math.floor(1000 + Math.random() * 9000)}`;
+                    // Fallback: fully unique ID even without Firestore
+                    const fallback = `TW-${uuidv4().slice(0, 8)}`;
                     setTableNumber(fallback);
                     localStorage.setItem('tableNumber', fallback);
+                    localStorage.removeItem('trackedOrderId');
+                    setTrackedOrderId(null);
+                    setLastOrder(null);
                     setView('menu');
                   }
                 }}
@@ -1953,13 +1980,20 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center justify-between pt-3 border-t mb-5">
-                            <div className="font-black text-2xl">₺{order.total}</div>
+                            <div>
+                              <div className="font-black text-2xl">₺{order.total}</div>
+                              {order.paymentStatus === 'paid' ? (
+                                <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-full uppercase">✓ Paid</span>
+                              ) : (
+                                <span className="text-[10px] font-black text-orange-500 bg-orange-50 px-2 py-0.5 rounded-full uppercase">Unpaid</span>
+                              )}
+                            </div>
                             <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1" aria-label="Delete order">
                               <Trash2 size={16} />
                             </button>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-2 gap-2 mb-2">
                             <button
                               onClick={() => updateOrderStatus(order.id, 'preparing')}
                               className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'preparing' ? 'bg-blue-600 text-white shadow-lg' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
@@ -1972,11 +2006,20 @@ export default function App() {
                             >
                               <CheckCircle size={16} className="mb-1" /> {t.ready}
                             </button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
                             <button
                               onClick={() => updateOrderStatus(order.id, 'delivered')}
                               className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'delivered' ? 'bg-gray-600 text-white shadow-lg' : 'bg-gray-50 text-gray-600 hover:bg-gray-200'}`}
                             >
                               <Truck size={16} className="mb-1" /> {t.delivered}
+                            </button>
+                            <button
+                              onClick={() => confirmPayment(order.id)}
+                              disabled={order.paymentStatus === 'paid'}
+                              className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.paymentStatus === 'paid' ? 'bg-green-600 text-white shadow-lg opacity-60 cursor-not-allowed' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}
+                            >
+                              <DollarSign size={16} className="mb-1" /> {lang === 'tr' ? 'Ödendi' : 'Paid ✓'}
                             </button>
                           </div>
                         </div>
@@ -2342,30 +2385,25 @@ export default function App() {
                   </div>
                 </div>
 
-                {lastOrder?.status === 'delivered' && (
-                  <button
-                    onClick={() => {
-                      localStorage.removeItem('trackedOrderId');
-                      setTrackedOrderId(null);
-                      setLastOrder(null);
-                      setView('menu');
-                    }}
-                    className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl shadow-xl hover:bg-orange-700 transition-all active:scale-95 mb-3"
-                  >
-                    {t.new_order}
-                  </button>
+                {/* Payment status banner */}
+                {lastOrder?.paymentStatus === 'paid' && (
+                  <div className="bg-green-50 border border-green-200 rounded-2xl p-4 mb-4 text-center">
+                    <div className="text-green-600 font-black text-lg">✓ {lang === 'tr' ? 'Ödeme Alındı' : 'Payment Confirmed'}</div>
+                  </div>
                 )}
+
+                {/* Allow placing another order anytime — multi-order support */}
+                <button
+                  onClick={() => setView('menu')}
+                  className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl shadow-xl hover:bg-orange-700 transition-all active:scale-95 mb-3"
+                >
+                  {t.new_order}
+                </button>
                 <button
                   onClick={requestBill}
                   className="w-full bg-orange-100 text-orange-600 font-bold py-3 rounded-2xl hover:bg-orange-200 transition-all active:scale-95 mb-3"
                 >
                   {lang === 'tr' ? 'Hesap İste' : (lang === 'ar' ? 'طلب الفاتورة' : 'Request Bill')}
-                </button>
-                <button
-                  onClick={() => setView('menu')}
-                  className="w-full bg-black text-white font-bold py-3 rounded-2xl hover:bg-gray-800 transition-all active:scale-95 mb-3"
-                >
-                  {t.back}
                 </button>
               </div>
             );
