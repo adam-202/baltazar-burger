@@ -464,6 +464,7 @@ export default function App() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<ItemVariant | null>(null);
+  const [newTableNumber, setNewTableNumber] = useState('');
 
   // fetch admins when settings view opens
   useEffect(() => {
@@ -724,38 +725,52 @@ export default function App() {
     setError("An error occurred with the database. Please try again.");
   }, []);
 
-  // --- Auth ---
+  // --- Auth & Admin Verification ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        let isAdminEmail = ADMIN_EMAILS.includes(currentUser.email || "");
-        if (!isAdminEmail) {
+        let isVerifiedAdmin = ADMIN_EMAILS.includes(currentUser.email || "");
+        
+        // Unified Admin Authorization: Check users collection
+        if (!isVerifiedAdmin) {
+          try {
+            const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+            if (userDoc.exists() && userDoc.data().role === 'admin') {
+              isVerifiedAdmin = true;
+            }
+          } catch (e) {
+            console.error("User role check failed:", e);
+          }
+        }
+
+        // Legacy Settings Check (as second fallback)
+        if (!isVerifiedAdmin) {
           try {
             const docSnap = await getDoc(doc(db, 'categories', 'admin_settings'));
             if (docSnap.exists()) {
               const data = docSnap.data();
               const emails = data.emails || [];
               if (Array.isArray(emails) && emails.includes(currentUser.email)) {
-                isAdminEmail = true;
-              } else if (data.name) {
-                 try {
-                   const parsed = JSON.parse(data.name);
-                   if (Array.isArray(parsed) && parsed.includes(currentUser.email)) isAdminEmail = true;
-                 } catch {}
+                isVerifiedAdmin = true;
+                // Auto-sync this user to the users collection for modern auth
+                await setDoc(doc(db, 'users', currentUser.uid), {
+                  uid: currentUser.uid,
+                  email: currentUser.email,
+                  role: 'admin'
+                }, { merge: true });
               }
             }
           } catch (e) { }
         }
-        setIsAdmin(isAdminEmail);
-        // Restore admin view only if the user is actually admin
-        if (isAdminEmail) {
+
+        setIsAdmin(isVerifiedAdmin);
+        if (isVerifiedAdmin) {
           const savedView = localStorage.getItem('lastView');
           if (savedView === 'admin') setView('admin');
         }
       } else {
         setIsAdmin(false);
-        // Ensure non-admins can never stay on admin view
         setView(prev => prev === 'admin' ? 'menu' : prev);
       }
     });
@@ -773,28 +788,20 @@ export default function App() {
   const loginAdmin = async () => {
     const provider = new GoogleAuthProvider();
     try {
-      // Persist session across browser restarts
       await setPersistence(auth, browserLocalPersistence);
       const result = await signInWithPopup(auth, provider);
-      let isAdminEmail = ADMIN_EMAILS.includes(result.user.email || "");
-      if (!isAdminEmail) {
-        try {
-          const docSnap = await getDoc(doc(db, 'categories', 'admin_settings'));
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const emails = data.emails || [];
-            if (Array.isArray(emails) && emails.includes(result.user.email)) {
-              isAdminEmail = true;
-            } else if (data.name) {
-               try {
-                 const parsed = JSON.parse(data.name);
-                 if (Array.isArray(parsed) && parsed.includes(result.user.email)) isAdminEmail = true;
-               } catch {}
-            }
-          }
-        } catch (e) { }
+      const currentUser = result.user;
+      
+      let isVerifiedAdmin = ADMIN_EMAILS.includes(currentUser.email || "");
+      
+      if (!isVerifiedAdmin) {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (userDoc.exists() && userDoc.data().role === 'admin') {
+          isVerifiedAdmin = true;
+        }
       }
-      if (isAdminEmail) {
+
+      if (isVerifiedAdmin) {
         setIsAdmin(true);
         setView('admin');
       } else {
@@ -1623,6 +1630,60 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* DB Initialization Section */}
+                {(categories.length === 0 || tables.length === 0) && (
+                  <div className="bg-orange-50 border-2 border-orange-200 p-8 rounded-[2.5rem] text-center">
+                    <AlertCircle className="mx-auto text-orange-600 mb-4" size={48} />
+                    <h3 className="text-xl font-black mb-2">Database Empty</h3>
+                    <p className="text-gray-600 mb-6 max-w-sm mx-auto font-medium">Critical collections are missing. Please initialize the database to start using the system.</p>
+                    <button
+                      onClick={async () => {
+                        try {
+                          // 1. Create a default table
+                          await setDoc(doc(db, 'tables', '1'), {
+                            id: '1',
+                            number: '1',
+                            last_reset_at: Date.now()
+                          });
+                          
+                          // 2. Create daily_stats for today
+                          const today = new Date().toISOString().split('T')[0];
+                          await setDoc(doc(db, 'daily_stats', today), {
+                            takeaway_count: 0
+                          }, { merge: true });
+                          
+                          // 3. Sync current admin to users collection
+                          if (user) {
+                            await setDoc(doc(db, 'users', user.uid), {
+                              uid: user.uid,
+                              email: user.email,
+                              role: 'admin'
+                            });
+                          }
+                          
+                          // 4. Create initial category
+                          await setDoc(doc(db, 'categories', 'welcome'), {
+                            id: 'welcome',
+                            name: 'Ana Menü',
+                            name_en: 'Main Menu',
+                            name_ar: 'القائمة الرئيسية',
+                            image: 'https://images.unsplash.com/photo-1550547660-d9450f859349?q=80&w=800',
+                            order: 1
+                          });
+
+                          alert("Database Initialized Successfully!");
+                        } catch (err) {
+                          console.error(err);
+                          alert("Initialization failed. Check console and firestore rules.");
+                        }
+                      }}
+                      className="bg-orange-600 shadow-lg shadow-orange-200 text-white font-black px-10 py-4 rounded-2xl hover:bg-orange-700 transition-all active:scale-95 flex items-center gap-2 mx-auto"
+                    >
+                      <Sparkles size={20} /> Initialize Database
+                    </button>
+                  </div>
+                )}
+
                 {/* Reset Day Button */}
                 <div className="flex justify-end">
                   <button
@@ -1738,6 +1799,72 @@ export default function App() {
                   
                   <div className="text-7xl font-black text-orange-600 mb-3">{takeawayStats}</div>
                   <div className="text-sm font-bold tracking-widest text-gray-400 uppercase">{lang === 'tr' ? 'Bugünün Paket Servis Oranı' : 'Takeaway Count Today'}</div>
+                </div>
+              </div>
+            )}
+
+            {adminSubView === 'tables' && (
+              <div className="space-y-6 animate-in fade-in max-w-4xl mx-auto">
+                <div className="bg-white p-8 rounded-[3rem] border border-gray-100 shadow-sm">
+                  <h3 className="text-xl font-black mb-6 flex items-center gap-2">
+                    <QrCode className="text-orange-600" /> {lang === 'tr' ? 'Masa Yönetimi' : 'Table Management'}
+                  </h3>
+                  
+                  <div className="flex gap-2 mb-8">
+                    <input 
+                      type="text" 
+                      placeholder={lang === 'tr' ? 'Masa No (örn: 5)' : 'Table No (e.g., 5)'}
+                      className="flex-1 bg-gray-50 border-none rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-orange-500"
+                      value={newTableNumber}
+                      onChange={(e) => setNewTableNumber(e.target.value)}
+                    />
+                    <button 
+                      onClick={async () => {
+                        if(!newTableNumber) return;
+                        try {
+                          await setDoc(doc(db, 'tables', newTableNumber), {
+                            id: newTableNumber,
+                            number: newTableNumber,
+                            last_reset_at: Date.now()
+                          });
+                          setNewTableNumber('');
+                        } catch (e) {
+                          alert("Error adding table");
+                        }
+                      }}
+                      className="bg-black text-white px-8 rounded-2xl font-black hover:bg-gray-800 transition-all active:scale-95"
+                    >
+                      {t.add}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {tables.map(table => (
+                      <div key={table.id} className="bg-gray-50 p-6 rounded-3xl border border-gray-100 relative group flex flex-col items-center">
+                        <div className="text-3xl font-black mb-2">#{table.number}</div>
+                        <QRCodeSVG 
+                          value={`${window.location.origin}/?table=${table.number}`} 
+                          size={100}
+                          level="H"
+                          includeMargin={true}
+                        />
+                        <button 
+                          onClick={async () => {
+                            if(confirm("Delete table #" + table.number + "?")) {
+                              await deleteDoc(doc(db, 'tables', table.id));
+                            }
+                          }}
+                          className="absolute top-2 right-2 text-red-300 hover:text-red-500 p-2 transition-colors opacity-0 group-hover:opacity-100"
+                          aria-label="Delete table"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    {tables.length === 0 && (
+                      <div className="col-span-full py-10 text-center text-gray-300 font-bold">No tables defined yet.</div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
