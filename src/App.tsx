@@ -449,14 +449,18 @@ const getTimeElapsed = (timestamp: number, lang: string = 'en') => {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [lang, setLang] = useState('tr');
   // Validate restored view — only allow 'admin' if the user is actually admin.
   // On load: if a tracked order ID exists in localStorage, auto-route to 'track'.
+  // Admin view requires authLoading to complete before we know if the user is admin.
   const [view, setView] = useState(() => {
-    if (!localStorage.getItem('tableNumber')) return 'welcome';
     const saved = localStorage.getItem('lastView') || 'menu';
+    // If last view was admin, keep it — onAuthStateChanged will validate
+    if (saved === 'admin') return 'admin';
+    if (!localStorage.getItem('tableNumber')) return 'welcome';
     if (localStorage.getItem('trackedOrderId')) return 'track';
-    return saved === 'admin' ? 'welcome' : saved;
+    return saved;
   });
   const [adminSubView, setAdminSubView] = useState<'dashboard' | 'orders' | 'takeaway' | 'categories' | 'items' | 'calls' | 'settings' | 'tables'>(() => (localStorage.getItem('lastAdminSubView') as any) || 'dashboard');
   const [dbAdmins, setDbAdmins] = useState<string[]>([]);
@@ -768,11 +772,15 @@ export default function App() {
         if (isVerifiedAdmin) {
           const savedView = localStorage.getItem('lastView');
           if (savedView === 'admin') setView('admin');
+        } else {
+          // Not admin — kick out of admin view if they were there
+          setView(prev => prev === 'admin' ? 'welcome' : prev);
         }
       } else {
         setIsAdmin(false);
-        setView(prev => prev === 'admin' ? 'menu' : prev);
+        setView(prev => prev === 'admin' ? 'welcome' : prev);
       }
+      setAuthLoading(false);
     });
     return () => unsubscribe();
   }, []);
@@ -996,8 +1004,9 @@ export default function App() {
     if (!tableNumber || cart.length === 0) return;
     setIsOrdering(true);
     try {
-      // Use unique ID for every order instead of tableNumber
-      const orderRef = doc(collection(db, 'orders'));
+      // Unique order ID — decoupled from tableNumber to prevent collisions
+      const orderId = uuidv4();
+      const orderRef = doc(db, 'orders', orderId);
       
       const newItems = cart.map(i => ({
         id: uuidv4(),
@@ -1011,7 +1020,7 @@ export default function App() {
       }));
 
       await setDoc(orderRef, {
-        id: orderRef.id,
+        id: orderId,
         table: tableNumber,
         items: newItems,
         total: cartTotal,
@@ -1022,11 +1031,14 @@ export default function App() {
       
       await setDoc(doc(db, 'carts', tableNumber), { items: [] });
       setOrderNote('');
-      setTrackedOrderId(orderRef.id);
-      localStorage.setItem('trackedOrderId', orderRef.id);
+      setTrackedOrderId(orderId);
+      localStorage.setItem('trackedOrderId', orderId);
       setView('track');
-    } catch (err) {
-      console.error("Order error:", err);
+    } catch (err: any) {
+      // Log Firestore-specific error code for debugging permission issues
+      const code = err?.code || 'unknown';
+      const message = err?.message || String(err);
+      console.error(`Order error [${code}]:`, message, err);
       setError(t.error_generic);
     } finally {
       setIsOrdering(false);
@@ -1241,22 +1253,43 @@ export default function App() {
   const resetDay = async () => {
     setShowResetConfirm(false);
     try {
+      // Archive active orders by marking them delivered (not deleting)
       const activeOrders = todayOrders.filter(o => o.status !== 'delivered');
       if (activeOrders.length > 0) {
         await Promise.all(
-          activeOrders.map(o => deleteDoc(doc(db, 'orders', o.id)))
+          activeOrders.map(o => updateDoc(doc(db, 'orders', o.id), { status: 'delivered' }))
         );
       }
+      // Clear pending service calls
       if (serviceCalls.length > 0) {
         await Promise.all(
           serviceCalls.map(c => deleteDoc(doc(db, 'service_calls', c.id)))
         );
       }
-    } catch (err) {
-      console.error('Reset day error:', err);
+      // Update last_reset_at for all tables so customer devices clear their session
+      if (tables.length > 0) {
+        await Promise.all(
+          tables.map(t => updateDoc(doc(db, 'tables', t.id), { last_reset_at: Date.now() }))
+        );
+      }
+    } catch (err: any) {
+      const code = err?.code || 'unknown';
+      console.error(`Reset day error [${code}]:`, err);
       handleFirestoreError(err, OperationType.DELETE, 'bulk/reset');
     }
   };
+
+  // Block entire UI while auth state is resolving to prevent view flicker
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#FDFBF7] flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 text-orange-500 animate-spin mx-auto mb-4" />
+          <div className="text-sm font-bold text-gray-400 uppercase tracking-widest">Loading...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] text-[#2D2D2D] font-sans selection:bg-orange-100 transition-all duration-300" dir={isRtl ? 'rtl' : 'ltr'}>
