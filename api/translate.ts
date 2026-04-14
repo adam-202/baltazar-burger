@@ -14,8 +14,8 @@ export default async function handler(req: any, res: any) {
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    // gemini-2.0-flash is the current stable model
-    const modelName = "gemini-2.0-flash";
+    // gemini-2.5-flash-lite is used for the 1,000 requests per day free tier
+    const modelName = "gemini-2.5-flash-lite";
 
     const variantStr = (item.variants && item.variants.length > 0)
       ? ` Variants: ${JSON.stringify(item.variants.map((v: any) => v.label))}`

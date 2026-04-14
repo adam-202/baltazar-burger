@@ -388,7 +388,7 @@ const INITIAL_ITEMS: Item[] = [
 
 // --- Constants ---
 const ADMIN_EMAILS = ["adam.osama60@gmail.com"];
-const translationModel = "gemini-3-flash-preview";
+const translationModel = "gemini-2.5-flash-lite";
 
 // --- Error Handling ---
 enum OperationType {
