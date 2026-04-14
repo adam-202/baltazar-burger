@@ -388,7 +388,7 @@ const INITIAL_ITEMS: Item[] = [
 
 // --- Constants ---
 const ADMIN_EMAILS = ["adam.osama60@gmail.com"];
-const translationModel = "gemini-2.0-flash";
+const translationModel = "gemini-3-flash-preview";
 
 // --- Error Handling ---
 enum OperationType {
@@ -1249,7 +1249,14 @@ export default function App() {
 
       console.log("Translation response:", response);
       const text = response.text || "";
-      const parsed = JSON.parse(cleanJson(text || '{}'));
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(cleanJson(text || '{}'));
+      } catch (parseErr) {
+        console.error("JSON Parse Error:", parseErr, "Raw Text:", text);
+        // Fallback for simple name response if schema fails
+        parsed = { name_en: text, name_ar: text, description_en: '', description_ar: '' };
+      }
       if (parsed.variants && item.variants) {
          parsed.variants = item.variants.map((v, i) => ({
            ...v,
