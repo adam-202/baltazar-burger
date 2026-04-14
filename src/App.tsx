@@ -36,7 +36,7 @@ import {
   QrCode,
   ShoppingBag
 } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
 import { v4 as uuidv4 } from 'uuid';
 import {
   collection,
@@ -388,7 +388,7 @@ const INITIAL_ITEMS: Item[] = [
 
 // --- Constants ---
 const ADMIN_EMAILS = ["adam.osama60@gmail.com"];
-const translationModel = "gemini-2.5-flash";
+const translationModel = "gemini-1.5-flash";
 
 // --- Error Handling ---
 enum OperationType {
@@ -1368,6 +1368,18 @@ export default function App() {
     }
   };
 
+  const downloadQRCode = (tableNum: string) => {
+    const canvas = document.getElementById(`qr-canvas-${tableNum}`) as HTMLCanvasElement;
+    if (!canvas) return;
+    const pngUrl = canvas.toDataURL("image/png").replace("image/png", "image/octet-stream");
+    const downloadLink = document.createElement("a");
+    downloadLink.href = pngUrl;
+    downloadLink.download = `Baltazar_QR_Table_${tableNum}.png`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
   // Block entire UI while auth state is resolving to prevent view flicker
   if (authLoading) {
     return (
@@ -1967,27 +1979,60 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {/* Takeaway QR Card */}
+                    <div className="bg-orange-50 p-6 rounded-3xl border-2 border-orange-200 relative group flex flex-col items-center">
+                      <div className="text-xl font-black mb-2 text-orange-600 uppercase">Takeaway</div>
+                      <div className="bg-white p-2 rounded-xl mb-4 shadow-sm">
+                        <QRCodeCanvas 
+                          id="qr-canvas-takeaway"
+                          value={`${window.location.origin}/?table=takeaway`} 
+                          size={120}
+                          level="H"
+                          includeMargin={false}
+                        />
+                      </div>
+                      <button 
+                        onClick={() => downloadQRCode('takeaway')}
+                        className="bg-orange-600 text-white p-2 rounded-xl hover:bg-orange-700 transition-all active:scale-95"
+                        title="Download Takeaway QR"
+                      >
+                        <ShoppingBag size={18} />
+                      </button>
+                    </div>
+
                     {tables.map(table => (
                       <div key={table.id} className="bg-gray-50 p-6 rounded-3xl border border-gray-100 relative group flex flex-col items-center">
                         <div className="text-3xl font-black mb-2">#{table.number}</div>
-                        <QRCodeSVG 
-                          value={`${window.location.origin}/?table=${table.number}`} 
-                          size={100}
-                          level="H"
-                          includeMargin={true}
-                        />
-                        <button 
-                          onClick={async () => {
-                            if(confirm("Delete table #" + table.number + "?")) {
-                              await deleteDoc(doc(db, 'tables', table.id));
-                            }
-                          }}
-                          className="absolute top-2 right-2 text-red-300 hover:text-red-500 p-2 transition-colors opacity-0 group-hover:opacity-100"
-                          aria-label="Delete table"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        <div className="bg-white p-2 rounded-xl mb-4 shadow-sm">
+                          <QRCodeCanvas 
+                            id={`qr-canvas-${table.number}`}
+                            value={`${window.location.origin}/?table=${table.number}`} 
+                            size={120}
+                            level="H"
+                            includeMargin={false}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => downloadQRCode(table.number)}
+                            className="bg-gray-800 text-white p-2 rounded-xl hover:bg-gray-900 transition-all active:scale-95"
+                            title="Download QR"
+                          >
+                            <QrCode size={18} />
+                          </button>
+                          <button 
+                            onClick={async () => {
+                              if(confirm("Delete table #" + table.number + "?")) {
+                                await deleteDoc(doc(db, 'tables', table.id));
+                              }
+                            }}
+                            className="bg-red-50 text-red-400 p-2 rounded-xl hover:bg-red-100 transition-all opacity-0 group-hover:opacity-100"
+                            aria-label="Delete table"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                     {tables.length === 0 && (
