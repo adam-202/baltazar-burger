@@ -49,9 +49,9 @@ import {
   deleteDoc,
   orderBy,
   where,
-  getDocs,
   limit,
-  getDoc
+  getDoc,
+  increment
 } from 'firebase/firestore';
 import {
   signInWithPopup,
@@ -983,7 +983,12 @@ export default function App() {
     }
     setCart(newCart); // Optimistic UI
     if (tableNumber) {
-      await setDoc(doc(db, 'carts', tableNumber), { items: newCart }, { merge: true });
+      try {
+        const safeTableId = String(tableNumber).replace(/\//g, '-').trim() || 'unknown';
+        await setDoc(doc(db, 'carts', safeTableId), { items: newCart }, { merge: true });
+      } catch (err: any) {
+        console.error(`Cart add error [${err?.code}]:`, err);
+      }
     }
   };
 
@@ -997,7 +1002,12 @@ export default function App() {
     }
     setCart(newCart); // Optimistic UI
     if (tableNumber) {
-      await setDoc(doc(db, 'carts', tableNumber), { items: newCart }, { merge: true });
+      try {
+        const safeTableId = String(tableNumber).replace(/\//g, '-').trim() || 'unknown';
+        await setDoc(doc(db, 'carts', safeTableId), { items: newCart }, { merge: true });
+      } catch (err: any) {
+        console.error(`Cart remove error [${err?.code}]:`, err);
+      }
     }
   };
 
@@ -1028,7 +1038,12 @@ export default function App() {
       });
 
       // Clear the cart for this table (public carts collection — no auth required)
-      await setDoc(doc(db, 'carts', tableNumber), { items: [] });
+      try {
+        const safeTableId = String(tableNumber).replace(/\//g, '-').trim() || 'unknown';
+        await setDoc(doc(db, 'carts', safeTableId), { items: [] });
+      } catch (cartErr: any) {
+        console.error(`Cart clear error [${cartErr?.code}]:`, cartErr);
+      }
 
       setOrderNote('');
       // Track newest order for status updates
@@ -1436,13 +1451,18 @@ export default function App() {
                   try {
                     const today = new Date().toISOString().split('T')[0];
                     const statsRef = doc(db, 'daily_stats', today);
-                    const snap = await getDoc(statsRef);
-                    // Increment daily counter
-                    let count = 1;
-                    if (snap.exists() && snap.data().takeaway_count) {
-                       count = snap.data().takeaway_count + 1;
+                    
+                    try {
+                      // Atomic operation
+                      await setDoc(statsRef, { takeaway_count: increment(1) }, { merge: true });
+                    } catch (err: any) {
+                      console.warn(`Increment failed [${err?.code}], initializing or falling back`, err);
+                      await setDoc(statsRef, { takeaway_count: 1 }, { merge: true });
                     }
-                    await setDoc(statsRef, { takeaway_count: count }, { merge: true });
+                    
+                    const snap = await getDoc(statsRef);
+                    const count = snap.exists() && snap.data().takeaway_count ? snap.data().takeaway_count : 1;
+                    
                     // Each takeaway session gets a unique ID — prevents collisions on repeat orders
                     const virtualTable = `TW-${count}-${uuidv4().slice(0, 6)}`;
                     setTableNumber(virtualTable);
@@ -1453,7 +1473,7 @@ export default function App() {
                     setLastOrder(null);
                     setView('menu');
                   } catch (err) {
-                    console.error(err);
+                    console.error("Takeaway initialization error:", err);
                     // Fallback: fully unique ID even without Firestore
                     const fallback = `TW-${uuidv4().slice(0, 8)}`;
                     setTableNumber(fallback);

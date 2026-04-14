@@ -17,5 +17,7 @@ const databaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID as string;
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, databaseId);
+export const db = databaseId && databaseId.trim() !== '' && databaseId !== '(default)' 
+  ? getFirestore(app, databaseId) 
+  : getFirestore(app);
 export const storage = getStorage(app);
