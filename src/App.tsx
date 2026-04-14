@@ -1955,9 +1955,18 @@ export default function App() {
                         <QRCodeCanvas 
                           id="qr-canvas-takeaway"
                           value={`${window.location.origin}/?table=takeaway`} 
-                          size={120}
+                          size={1024}
                           level="H"
-                          includeMargin={false}
+                          includeMargin={true}
+                          style={{ width: '120px', height: '120px' }}
+                          imageSettings={{
+                            src: "/logo.png",
+                            x: undefined,
+                            y: undefined,
+                            height: 256,
+                            width: 256,
+                            excavate: true,
+                          }}
                         />
                       </div>
                       <button 
@@ -1976,9 +1985,18 @@ export default function App() {
                           <QRCodeCanvas 
                             id={`qr-canvas-${table.number}`}
                             value={`${window.location.origin}/?table=${table.number}`} 
-                            size={120}
+                            size={1024}
                             level="H"
-                            includeMargin={false}
+                            includeMargin={true}
+                            style={{ width: '120px', height: '120px' }}
+                            imageSettings={{
+                              src: "/logo.png",
+                              x: undefined,
+                              y: undefined,
+                              height: 256,
+                              width: 256,
+                              excavate: true,
+                            }}
                           />
                         </div>
                         <div className="flex gap-2">
