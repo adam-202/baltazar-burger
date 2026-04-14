@@ -51,7 +51,9 @@ import {
   where,
   limit,
   getDoc,
-  increment
+  getDocs,
+  increment,
+  writeBatch
 } from 'firebase/firestore';
 import {
   signInWithPopup,
@@ -179,6 +181,7 @@ const TRANSLATIONS: Record<string, any> = {
     call_waiter: 'Garson Çağır',
     waiter_called: 'Garson Çağrıldı!',
     waiter_desc: 'Garsonumuz en kısa sürede masanıza gelecektir.',
+    complete_payment: 'Ödemeyi Tamamla',
     print_receipt: 'Fiş Yazdır',
     service_calls: 'Servis Çağrıları',
     no_calls: 'Bekleyen çağrı yok.',
@@ -254,6 +257,7 @@ const TRANSLATIONS: Record<string, any> = {
     call_waiter: 'Call Waiter',
     waiter_called: 'Waiter Called!',
     waiter_desc: 'A waiter will be at your table shortly.',
+    complete_payment: 'Complete Payment',
     print_receipt: 'Print Receipt',
     service_calls: 'Service Calls',
     no_calls: 'No pending calls.',
@@ -329,6 +333,7 @@ const TRANSLATIONS: Record<string, any> = {
     call_waiter: 'طلب النادل',
     waiter_called: 'تم طلب النادل!',
     waiter_desc: 'سيأتي النادل إلى طاولتك قريباً.',
+    complete_payment: 'إتمام الدفع',
     print_receipt: 'طباعة الفاتورة',
     service_calls: 'طلبات الخدمة',
     no_calls: 'لا توجد طلبات.',
@@ -498,6 +503,7 @@ export default function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [tables, setTables] = useState<AppTable[]>([]);
   const [liveOrders, setLiveOrders] = useState<Order[]>([]);
+  const [sessionOrders, setSessionOrders] = useState<Order[]>([]);
   const [todayOrders, setTodayOrders] = useState<Order[]>([]);
   const [serviceCalls, setServiceCalls] = useState<any[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -903,14 +909,32 @@ export default function App() {
     return () => unsubscribe();
   }, [trackedOrderId]);
 
+  // Table-wide session tracking for customers (all unpaid orders)
   useEffect(() => {
-    if (!isAdmin) return;
-    // Orders (Only active ones for performance)
+    if (!tableNumber || isAdmin) return;
     const q = query(
       collection(db, 'orders'),
-      where('status', 'in', ['pending', 'preparing', 'ready']),
+      where('table', '==', tableNumber),
+      where('paymentStatus', '==', 'unpaid'),
+      orderBy('timestamp', 'asc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setSessionOrders(orders);
+    }, (error) => {
+      console.error("Session tracking error:", error);
+    });
+    return () => unsubscribe();
+  }, [tableNumber, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    // Active / Unpaid Orders
+    const q = query(
+      collection(db, 'orders'),
+      where('paymentStatus', '==', 'unpaid'),
       orderBy('timestamp', 'desc'),
-      limit(50)
+      limit(100)
     );
     const unsubscribeOrders = onSnapshot(q, (snapshot) => {
       const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
@@ -957,6 +981,20 @@ export default function App() {
   const cartTotal = useMemo(() => {
     return cart.reduce((sum, item) => sum + ((Number(item.price) || 0) * item.quantity), 0);
   }, [cart]);
+
+  const sessionTotal = useMemo(() => {
+    return sessionOrders.reduce((acc, order) => acc + (Number(order.total) || 0), 0);
+  }, [sessionOrders]);
+
+  const liveOrdersByTable = useMemo(() => {
+    const groups: { [key: string]: Order[] } = {};
+    liveOrders.forEach(order => {
+      const tNum = String(order.table);
+      if (!groups[tNum]) groups[tNum] = [];
+      groups[tNum].push(order);
+    });
+    return groups;
+  }, [liveOrders]);
 
   const addToCart = async (item: Item, selectedVariant?: ItemVariant) => {
     const price = selectedVariant?.priceOverride !== undefined && selectedVariant?.priceOverride !== null 
@@ -1112,6 +1150,27 @@ export default function App() {
       await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
+  const markTableAsPaid = async (tableNum: string) => {
+    try {
+      const q = query(
+        collection(db, 'orders'),
+        where('table', '==', tableNum),
+        where('paymentStatus', '==', 'unpaid')
+      );
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => {
+        batch.update(d.ref, { 
+          paymentStatus: 'paid',
+          status: 'delivered' 
+        });
+      });
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'orders');
     }
   };
 
@@ -1950,100 +2009,113 @@ export default function App() {
                   {liveOrders.length === 0 ? (
                     <div className="py-12 text-center text-gray-300 font-bold bg-gray-50 rounded-3xl">{t.no_active_orders}</div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {liveOrders.map(order => (
-                        <div
-                          key={order.id}
-                          className={`bg-white p-6 rounded-[2.5rem] border-4 transition-all ${order.status === 'pending'
-                            ? 'border-orange-500 shadow-2xl shadow-orange-100 bb-pulse-pending'
-                            : order.status === 'preparing'
-                              ? 'border-blue-400 shadow-xl shadow-blue-50'
-                              : order.status === 'ready'
-                                ? 'border-green-500 shadow-xl shadow-green-50'
-                                : 'border-gray-200 opacity-40'
-                            }`}
-                        >
-                          {/* High-contrast header */}
-                          <div className={`-mx-6 -mt-6 mb-5 px-6 py-4 rounded-t-[2.5rem] flex justify-between items-center ${order.status === 'pending' ? 'bg-orange-500 text-white' :
-                            order.status === 'preparing' ? 'bg-blue-500 text-white' :
-                              order.status === 'ready' ? 'bg-green-500 text-white' :
-                                'bg-gray-100 text-gray-400'
-                            }`}>
-                            <div className="flex items-center gap-3">
-                              <div className="text-4xl font-black">#{order.table}</div>
-                              {order.status === 'pending' && <Bell size={20} className="animate-bounce" />}
-                            </div>
-                            <div className="text-right">
-                              <div className="text-xs font-black opacity-80 uppercase">{getTimeElapsed(order.timestamp, lang)}</div>
-                              <div className="text-xs opacity-70">{new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</div>
-                            </div>
-                          </div>
-
-                          {order.note && (
-                            <div className="mb-4 p-3 bg-amber-50 rounded-2xl border-l-4 border-amber-400">
-                              <div className="text-[10px] font-black text-amber-500 uppercase mb-1">{t.customer_note}</div>
-                              <div className="text-sm font-medium">{order.note}</div>
-                            </div>
-                          )}
-
-                          <div className="space-y-3 mb-5 max-h-52 overflow-y-auto pr-1">
-                            {order.items.map((item, i) => (
-                              <div key={i} className="flex items-center gap-3 border-b border-gray-50 pb-2 last:border-0">
-                                <img src={item.image} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" alt={item.name} />
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-black leading-tight truncate">{item.name}</div>
-                                  <div className="text-[10px] text-gray-400 font-bold">₺{item.price} × {item.quantity}</div>
-                                </div>
-                                <div className="text-sm font-black text-orange-600">₺{item.price * item.quantity}</div>
+                    <div className="space-y-12">
+                      {(Object.entries(liveOrdersByTable) as [string, Order[]][]).sort((a, b) => a[0].localeCompare(b[0])).map(([tableNum, orders]) => {
+                        const tableTotal = orders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+                        return (
+                          <div key={tableNum} className="bb-table-group animate-in fade-in slide-in-from-bottom-2">
+                            <div className="flex justify-between items-end mb-6 px-4">
+                              <div>
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{t.table_no}</div>
+                                <div className="text-6xl font-black text-gray-900 leading-none">#{tableNum}</div>
                               </div>
-                            ))}
-                          </div>
-
-                          <div className="flex items-center justify-between pt-3 border-t mb-5">
-                            <div>
-                              <div className="font-black text-2xl">₺{order.total}</div>
-                              {order.paymentStatus === 'paid' ? (
-                                <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-full uppercase">✓ Paid</span>
-                              ) : (
-                                <span className="text-[10px] font-black text-orange-500 bg-orange-50 px-2 py-0.5 rounded-full uppercase">Unpaid</span>
-                              )}
+                              <div className="flex flex-col items-end">
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{t.total}</div>
+                                <div className="flex items-center gap-4">
+                                  <div className="text-4xl font-black text-gray-900 leading-none">₺{tableTotal}</div>
+                                  <button 
+                                    onClick={() => markTableAsPaid(tableNum)}
+                                    className="bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-2xl font-black flex items-center gap-2 shadow-xl shadow-green-100 transition-all active:scale-95"
+                                  >
+                                    <DollarSign size={24} /> {t.complete_payment}
+                                  </button>
+                                </div>
+                              </div>
                             </div>
-                            <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1" aria-label="Delete order">
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
 
-                          <div className="grid grid-cols-2 gap-2 mb-2">
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'preparing')}
-                              className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'preparing' ? 'bg-blue-600 text-white shadow-lg' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
-                            >
-                              <Flame size={16} className="mb-1" /> {t.preparing}
-                            </button>
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'ready')}
-                              className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'ready' ? 'bg-green-600 text-white shadow-lg' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}
-                            >
-                              <CheckCircle size={16} className="mb-1" /> {t.ready}
-                            </button>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                              {orders.map(order => (
+                                <div
+                                  key={order.id}
+                                  className={`bg-white p-6 rounded-[2.5rem] border-4 transition-all ${order.status === 'pending'
+                                    ? 'border-orange-500 shadow-2xl shadow-orange-100 bb-pulse-pending'
+                                    : order.status === 'preparing'
+                                      ? 'border-blue-400 shadow-xl shadow-blue-50'
+                                      : order.status === 'ready'
+                                        ? 'border-green-500 shadow-xl shadow-green-50'
+                                        : 'border-gray-200'
+                                    }`}
+                                >
+                                  {/* High-contrast header */}
+                                  <div className={`-mx-6 -mt-6 mb-5 px-6 py-4 rounded-t-[2.5rem] flex justify-between items-center ${order.status === 'pending' ? 'bg-orange-500 text-white' :
+                                    order.status === 'preparing' ? 'bg-blue-500 text-white' :
+                                      order.status === 'ready' ? 'bg-green-500 text-white' :
+                                        'bg-gray-100 text-gray-400'
+                                    }`}>
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-2xl font-black uppercase tracking-tighter">{order.status}</div>
+                                      {order.status === 'pending' && <Bell size={18} className="animate-bounce" />}
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-[10px] font-black opacity-80 uppercase">{getTimeElapsed(order.timestamp, lang)}</div>
+                                      <div className="text-[10px] opacity-70">{new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</div>
+                                    </div>
+                                  </div>
+
+                                  {order.note && (
+                                    <div className="mb-4 p-3 bg-amber-50 rounded-2xl border-l-4 border-amber-400">
+                                      <div className="text-[10px] font-black text-amber-500 uppercase mb-1">{t.customer_note}</div>
+                                      <div className="text-sm font-medium">{order.note}</div>
+                                    </div>
+                                  )}
+
+                                  <div className="space-y-3 mb-5 max-h-52 overflow-y-auto pr-1">
+                                    {order.items.map((item, i) => (
+                                      <div key={i} className="flex items-center gap-3 border-b border-gray-50 pb-2 last:border-0">
+                                        <img src={item.image} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" referrerPolicy="no-referrer" alt={item.name} />
+                                        <div className="flex-1 min-w-0">
+                                          <div className="text-sm font-black leading-tight truncate">{item.name}</div>
+                                          <div className="text-[10px] text-gray-400 font-bold">₺{item.price} × {item.quantity} {item.variant ? `(${item.variant})` : ''}</div>
+                                        </div>
+                                        <div className="text-sm font-black text-orange-600">₺{item.price * item.quantity}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* Single Order Total & Status Buttons */}
+                                  <div className="flex items-center justify-between pt-3 border-t mb-5">
+                                    <div className="font-black text-2xl">₺{order.total}</div>
+                                    <button onClick={() => deleteOrder(order.id)} className="text-red-300 hover:text-red-500 transition-colors p-1" aria-label="Delete order">
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </div>
+
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                      onClick={() => updateOrderStatus(order.id, 'preparing')}
+                                      className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'preparing' ? 'bg-blue-600 text-white shadow-lg' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                                    >
+                                      <Flame size={16} className="mb-1" /> {t.preparing}
+                                    </button>
+                                    <button
+                                      onClick={() => updateOrderStatus(order.id, 'ready')}
+                                      className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'ready' ? 'bg-green-600 text-white shadow-lg' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}
+                                    >
+                                      <CheckCircle size={16} className="mb-1" /> {t.ready}
+                                    </button>
+                                    <button
+                                      onClick={() => updateOrderStatus(order.id, 'delivered')}
+                                      className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'delivered' ? 'bg-gray-600 text-white shadow-lg' : 'bg-gray-50 text-gray-600 hover:bg-gray-200'}`}
+                                    >
+                                      <Truck size={16} className="mb-1" /> {t.delivered}
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'delivered')}
-                              className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.status === 'delivered' ? 'bg-gray-600 text-white shadow-lg' : 'bg-gray-50 text-gray-600 hover:bg-gray-200'}`}
-                            >
-                              <Truck size={16} className="mb-1" /> {t.delivered}
-                            </button>
-                            <button
-                              onClick={() => confirmPayment(order.id)}
-                              disabled={order.paymentStatus === 'paid'}
-                              className={`flex flex-col items-center justify-center py-3 rounded-xl text-[10px] font-bold transition-all ${order.paymentStatus === 'paid' ? 'bg-green-600 text-white shadow-lg opacity-60 cursor-not-allowed' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}
-                            >
-                              <DollarSign size={16} className="mb-1" /> {lang === 'tr' ? 'Ödendi' : 'Paid ✓'}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2391,17 +2463,21 @@ export default function App() {
                 {/* Order summary */}
                 <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-gray-100 mb-6">
                   <div className="text-xs font-black text-gray-400 uppercase mb-4">{t.cart_title}</div>
-                  <div className="space-y-2 mb-4">
-                    {lastOrder?.items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-sm">
-                        <span className="font-medium">{item.quantity}× {item.name}</span>
-                        <span className="font-black text-orange-600">₺{item.price * item.quantity}</span>
+                  <div className="space-y-4 mb-4 font-mono">
+                    {sessionOrders.map((order, oIdx) => (
+                      <div key={order.id} className={oIdx > 0 ? "pt-4 border-t border-dashed border-gray-100" : ""}>
+                        {order.items.map((item, i) => (
+                          <div key={i} className="flex justify-between text-xs mb-1">
+                            <span className="font-medium">{item.quantity}× {item.name}</span>
+                            <span className="font-bold text-orange-600">₺{item.price * item.quantity}</span>
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>
-                  <div className="flex justify-between font-black text-lg border-t pt-3">
-                    <span>{t.total}</span>
-                    <span className="text-orange-600">₺{lastOrder?.total}</span>
+                  <div className="flex justify-between items-center pt-4 border-t-2 border-dashed border-gray-100">
+                    <div className="text-sm font-black text-gray-400 uppercase">{t.total}</div>
+                    <div className="text-3xl font-black text-orange-600">₺{sessionTotal}</div>
                   </div>
                 </div>
 
