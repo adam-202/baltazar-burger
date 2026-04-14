@@ -388,7 +388,7 @@ const INITIAL_ITEMS: Item[] = [
 
 // --- Constants ---
 const ADMIN_EMAILS = ["adam.osama60@gmail.com"];
-const translationModel = "gemini-1.5-flash";
+const translationModel = "models/gemini-1.5-flash";
 
 // --- Error Handling ---
 enum OperationType {
@@ -1240,14 +1240,16 @@ export default function App() {
 
       const response = await ai.models.generateContent({
         model: translationModel,
-        contents: prompt,
+        contents: [prompt],
         config: {
           responseMimeType: "application/json",
           responseSchema: schema
         }
       });
 
-      const parsed = JSON.parse(cleanJson(response.text || '{}'));
+      console.log("Translation response:", response);
+      const text = response.text || "";
+      const parsed = JSON.parse(cleanJson(text || '{}'));
       if (parsed.variants && item.variants) {
          parsed.variants = item.variants.map((v, i) => ({
            ...v,
@@ -1256,8 +1258,11 @@ export default function App() {
          }));
       }
       return parsed;
-    } catch (e) {
-      console.error("Translation error:", e);
+    } catch (e: any) {
+      console.error("Translation error details:", e);
+      // Surface the error to UI
+      const msg = e instanceof Error ? e.message : String(e);
+      window.alert(`Translation Failed: ${msg}`);
       return null;
     } finally {
       setIsTranslating(false);
@@ -1282,6 +1287,11 @@ export default function App() {
 
   const handleAutoTranslateCategory = async () => {
     if (!editingCategory) return;
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+    if (!apiKey) {
+      setError('Auto Translate: VITE_GEMINI_API_KEY missing. Please set it in your environment variables.');
+      return;
+    }
     const trans = await performTranslation(editingCategory, 'category');
     if (trans) {
       setEditingCategory({
