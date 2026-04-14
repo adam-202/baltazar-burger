@@ -2595,6 +2595,12 @@ export default function App() {
               <textarea className="w-full bg-gray-50 p-4 rounded-2xl outline-none h-24 focus:ring-2 focus:ring-orange-500" value={editingItem.description} onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })} placeholder="Açıklama (TR)" />
               <div className="space-y-1">
                 <div className="text-[10px] font-black uppercase text-gray-400 ml-2">{t.img_url}</div>
+                <input 
+                  className="w-full bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500 mb-2" 
+                  value={editingItem.image} 
+                  onChange={(e) => setEditingItem({ ...editingItem, image: e.target.value })} 
+                  placeholder="https://example.com/image.jpg"
+                />
                 <div className="flex gap-2">
                   <input 
                     type="file" 
@@ -2698,8 +2704,15 @@ export default function App() {
             </div>
             <div className="space-y-4">
               <input className="w-full bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500" value={editingCategory.name} onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })} placeholder="Title (TR)" />
+              
               <div className="space-y-1">
                 <div className="text-[10px] font-black uppercase text-gray-400 ml-2">{t.img_url}</div>
+                <input 
+                  className="w-full bg-gray-50 p-4 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-orange-500 mb-2" 
+                  value={editingCategory.image} 
+                  onChange={(e) => setEditingCategory({ ...editingCategory, image: e.target.value })} 
+                  placeholder="https://example.com/image.jpg"
+                />
                 <div className="flex gap-2">
                   <input 
                     type="file" 
@@ -2717,7 +2730,7 @@ export default function App() {
                   {isUploading && <Loader2 className="animate-spin text-orange-600 self-center" />}
                 </div>
                 {editingCategory.image && (
-                  <div className="mt-2 relative group">
+                  <div className="mt-2 relative group w-20 h-20">
                     <img src={editingCategory.image} className="w-20 h-20 rounded-xl object-cover border border-gray-100" alt="Category preview" />
                     <button 
                       onClick={() => setEditingCategory({ ...editingCategory, image: '' })}
@@ -2729,6 +2742,18 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* Translation fields */}
+              <div className="bg-orange-50 rounded-2xl p-4 space-y-3">
+                <div className="text-xs font-black uppercase tracking-widest text-orange-500 mb-2">English</div>
+                <input className="w-full bg-white p-3 rounded-xl outline-none focus:ring-2 focus:ring-orange-400 text-sm" value={editingCategory.name_en || ''} onChange={(e) => setEditingCategory({ ...editingCategory, name_en: e.target.value })} placeholder="Name (EN)" />
+              </div>
+
+              <div className="bg-blue-50 rounded-2xl p-4 space-y-3" dir="rtl">
+                <div className="text-xs font-black uppercase tracking-widest text-blue-500 mb-2">Arabic — العربية</div>
+                <input className="w-full bg-white p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-400 text-sm" value={editingCategory.name_ar || ''} onChange={(e) => setEditingCategory({ ...editingCategory, name_ar: e.target.value })} placeholder="الاسم" />
+              </div>
+
               <button
                 onClick={handleAutoTranslateCategory}
                 disabled={isTranslating}
