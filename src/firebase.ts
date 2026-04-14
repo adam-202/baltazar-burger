@@ -13,11 +13,18 @@ const firebaseConfig = {
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const databaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID as string;
+const databaseId = (import.meta.env.VITE_FIREBASE_DATABASE_ID as string || '').trim();
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = databaseId && databaseId.trim() !== '' && databaseId !== '(default)' 
+
+// Defensive check for databaseId
+export const db = (databaseId && 
+                   databaseId !== '' && 
+                   databaseId !== '(default)' && 
+                   databaseId !== 'undefined' && 
+                   databaseId !== 'null') 
   ? getFirestore(app, databaseId) 
   : getFirestore(app);
+
 export const storage = getStorage(app);

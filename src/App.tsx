@@ -1056,7 +1056,7 @@ export default function App() {
       const code = err?.code || 'unknown';
       const message = err?.message || String(err);
       console.error(`Order error [${code}]:`, message, err);
-      setError(t.error_generic);
+      setError(`${t.error_generic} [${code}]`);
     } finally {
       setIsOrdering(false);
     }
