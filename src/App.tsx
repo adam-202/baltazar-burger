@@ -1260,9 +1260,8 @@ export default function App() {
       return parsed;
     } catch (e: any) {
       console.error("Translation error details:", e);
-      // Surface the error to UI
       const msg = e instanceof Error ? e.message : String(e);
-      window.alert(`Translation Failed: ${msg}`);
+      window.alert(`DİKKAT: Çeviri Hatası!\nModel: ${translationModel}\nMesaj: ${msg}\n\nLütfen Vercel Paneli'nde en son değişikliğin (Current Model fix) DEPLOY edildiğinden emin olun.`);
       return null;
     } finally {
       setIsTranslating(false);
