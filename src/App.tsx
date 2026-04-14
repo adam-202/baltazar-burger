@@ -594,16 +594,22 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const tbl = params.get('table');
     if (tbl) {
-      getDoc(doc(db, 'tables', tbl)).then((snap) => {
-        if (snap.exists()) {
-          setTableNumber(tbl);
-          setView('menu');
-          window.history.replaceState({}, document.title, window.location.pathname);
-        } else {
-          alert('Invalid table. Please call waiter.');
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      });
+      if (tbl === 'takeaway') {
+        setTableNumber('takeaway');
+        setView('menu');
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else {
+        getDoc(doc(db, 'tables', tbl)).then((snap) => {
+          if (snap.exists()) {
+            setTableNumber(tbl);
+            setView('menu');
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } else {
+            alert('Invalid table. Please call waiter.');
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        });
+      }
     }
   }, []);
 
