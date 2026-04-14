@@ -1174,7 +1174,6 @@ export default function App() {
     }
   };
 
-  // Confirm payment — marks order paid WITHOUT deleting it, keeps full audit trail
   const confirmPayment = async (orderId: string) => {
     try {
       await updateDoc(doc(db, 'orders', orderId), {
@@ -1196,65 +1195,28 @@ export default function App() {
     }
   };
 
-  // --- Translation ---
   const performTranslation = async (item: Partial<Item> & { name: string }, type: 'item' | 'category' = 'item') => {
     if (!item.name) return null;
     setIsTranslating(true);
     try {
-      const ai = getGenAI();
-      const variantStr = (item.variants && item.variants.length > 0) ? ` Variants: JSON array ${JSON.stringify(item.variants.map(v => v.label))}` : "";
-      
-      const prompt = type === 'item' ?
-        `Translate this menu item from Turkish to English and Arabic. Return JSON with exactly these keys: "name_en", "description_en", "name_ar", "description_ar", and if variants are provided, provide "variants" array with objects containing "label_en", "label_ar". Name: "${item.name}". Description: "${item.description || ''}"${variantStr}` :
-        `Translate this category from Turkish to English and Arabic. Return JSON with exactly these keys: "name_en", "name_ar". Name: "${item.name}"`;
-
-      const itemProps: any = { 
-        name_en: { type: Type.STRING }, 
-        description_en: { type: Type.STRING }, 
-        name_ar: { type: Type.STRING }, 
-        description_ar: { type: Type.STRING } 
-      };
-
-      if (item.variants && item.variants.length > 0) {
-         itemProps.variants = {
-           type: Type.ARRAY,
-           items: {
-             type: Type.OBJECT,
-             properties: {
-               label_en: { type: Type.STRING },
-               label_ar: { type: Type.STRING }
-             }
-           }
-         };
-      }
-
-      const schema = type === 'item' ? {
-        type: Type.OBJECT,
-        properties: itemProps,
-        required: ["name_en", "description_en", "name_ar", "description_ar"]
-      } : {
-        type: Type.OBJECT,
-        properties: { name_en: { type: Type.STRING }, name_ar: { type: Type.STRING } },
-        required: ["name_en", "name_ar"]
-      };
-
-      const response = await ai.models.generateContent({
-        model: translationModel,
-        contents: [prompt],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: schema
-        }
+      const resp = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item, type })
       });
 
-      console.log("Translation response:", response);
+      if (!resp.ok) {
+        const errData = await resp.json();
+        throw new Error(errData.error || 'Server error');
+      }
+
+      const response = await resp.json();
       const text = response.text || "";
       let parsed: any = {};
       try {
         parsed = JSON.parse(cleanJson(text || '{}'));
       } catch (parseErr) {
         console.error("JSON Parse Error:", parseErr, "Raw Text:", text);
-        // Fallback for simple name response if schema fails
         parsed = { name_en: text, name_ar: text, description_en: '', description_ar: '' };
       }
       if (parsed.variants && item.variants) {
@@ -1268,7 +1230,7 @@ export default function App() {
     } catch (e: any) {
       console.error("Translation error details:", e);
       const msg = e instanceof Error ? e.message : String(e);
-      window.alert(`DİKKAT: Çeviri Hatası!\nModel: ${translationModel}\nMesaj: ${msg}\n\nLütfen Vercel Paneli'nde en son değişikliğin (Current Model fix) DEPLOY edildiğinden emin olun.`);
+      window.alert(`DİKKAT: Çeviri Hatası!\nMesaj: ${msg}\n\nLütfen Vercel Cloud Functions'ın (API Proxy) çalıştığından emin olun.`);
       return null;
     } finally {
       setIsTranslating(false);
@@ -1277,11 +1239,6 @@ export default function App() {
 
   const handleAutoTranslateItem = async () => {
     if (!editingItem) return;
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-    if (!apiKey) {
-      setError('Auto Translate: VITE_GEMINI_API_KEY ortam değişkeni eksik. Lütfen proje kök dizininde .env dosyası oluşturun ve VITE_GEMINI_API_KEY anahtarını ekleyin.');
-      return;
-    }
     const trans = await performTranslation(editingItem, 'item');
     if (trans) {
       setEditingItem({
@@ -1293,11 +1250,6 @@ export default function App() {
 
   const handleAutoTranslateCategory = async () => {
     if (!editingCategory) return;
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-    if (!apiKey) {
-      setError('Auto Translate: VITE_GEMINI_API_KEY missing. Please set it in your environment variables.');
-      return;
-    }
     const trans = await performTranslation(editingCategory, 'category');
     if (trans) {
       setEditingCategory({
