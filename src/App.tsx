@@ -1017,23 +1017,23 @@ export default function App() {
     try {
       const newItems = cart.map(i => ({
         id: uuidv4(),
-        name: i.name,
-        price: i.price,
-        image: i.image,
-        quantity: i.quantity,
-        variant: i.selectedVariant?.label,
+        name: i.name || 'Unknown Item',
+        price: Number(i.price) || 0,
+        image: i.image || '',
+        quantity: Number(i.quantity) || 1,
+        variant: i.selectedVariant?.label || null,
         status: 'sent',
         timestamp: Date.now()
       }));
 
       // addDoc auto-generates a unique Firestore document ID — no collisions possible
       const orderRef = await addDoc(collection(db, 'orders'), {
-        table: tableNumber,
+        table: String(tableNumber),
         items: newItems,
-        total: cartTotal,
+        total: Number(cartTotal) || 0,
         status: 'pending',
         paymentStatus: 'unpaid',
-        note: orderNote,
+        note: orderNote || "",
         timestamp: Date.now()
       });
 
